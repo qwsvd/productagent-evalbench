@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 
 class BaseProvider(ABC):
@@ -15,5 +15,6 @@ class BaseProvider(ABC):
         expected_answer_points: Sequence[str] | None = None,
         required_tools: Sequence[str] | None = None,
         risk_points: Sequence[str] | None = None,
+        retrieved_context: Sequence[Mapping[str, Any]] | None = None,
     ) -> str:
         """Return a final answer for one product task."""

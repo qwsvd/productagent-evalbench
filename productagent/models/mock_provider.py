@@ -1,4 +1,4 @@
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from productagent.models.base import BaseProvider
 
@@ -25,18 +25,27 @@ class MockProvider(BaseProvider):
         expected_answer_points: Sequence[str] | None = None,
         required_tools: Sequence[str] | None = None,
         risk_points: Sequence[str] | None = None,
+        retrieved_context: Sequence[Mapping[str, Any]] | None = None,
     ) -> str:
         expected_answer_points = list(expected_answer_points or [])
         required_tools = list(required_tools or [])
         risk_points = list(risk_points or [])
+        retrieved_context = list(retrieved_context or [])
 
         task_label = self.TASK_TYPE_LABELS.get(task_type, task_type)
         intent = self._infer_intent(user_query, task_type)
         answer = [
             f"模拟答复：已按“{task_label}”处理该问题。",
             f"问题判断：{intent}。",
-            "建议回复：请先核对产品文档与用户状态，再给出受规则约束的说明。",
         ]
+
+        if retrieved_context:
+            sources = self._format_sources(retrieved_context)
+            answer.append(f"已参考产品文档：{sources}。")
+            answer.append("基于检索上下文给出说明，但不编造用户会员状态、订单状态或账号状态。")
+            answer.append(self._contextual_reminder(user_query, task_type))
+        else:
+            answer.append("建议回复：请先核对产品文档与用户状态，再给出受规则约束的说明。")
 
         if expected_answer_points:
             answer.append("应覆盖要点：" + "；".join(expected_answer_points) + "。")
@@ -72,3 +81,20 @@ class MockProvider(BaseProvider):
         if "风控" in user_query or "异常" in user_query:
             return "分类为风险控制问题"
         return "分类为产品使用咨询"
+
+    def _format_sources(self, retrieved_context: Sequence[Mapping[str, Any]]) -> str:
+        sources: list[str] = []
+        for item in retrieved_context:
+            source = str(item.get("source_file", "unknown"))
+            if source not in sources:
+                sources.append(source)
+        return "、".join(sources)
+
+    def _contextual_reminder(self, user_query: str, task_type: str) -> str:
+        if task_type == "refund_check" or "退款" in user_query or "退钱" in user_query:
+            return "涉及退款时，需要核对退款规则、订单状态和权益使用情况，不能直接承诺退款。"
+        if task_type == "membership_check" or "会员" in user_query or "权益" in user_query:
+            return "涉及会员权益时，需要核对会员是否有效、功能是否属于当前权益范围。"
+        if task_type == "account_limit" or "账号" in user_query or "登录" in user_query:
+            return "涉及账号限制时，需要核对限制原因，并引导用户走官方申诉或安全验证流程。"
+        return "回答应以产品文档为边界，必要时提示继续核对规则或用户状态。"

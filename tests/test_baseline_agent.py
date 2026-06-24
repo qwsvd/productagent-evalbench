@@ -25,8 +25,8 @@ def test_baseline_agent_handles_one_task() -> None:
     assert result["risk_points"] == ["不要编造用户会员状态"]
 
 
-def test_cli_run_task_set_writes_results(tmp_path: Path) -> None:
-    output_path = tmp_path / "results.jsonl"
+def test_cli_run_baseline_writes_results(tmp_path: Path) -> None:
+    output_path = tmp_path / "baseline_results.jsonl"
 
     results = run_task_set(
         agent_name="baseline",
