@@ -55,7 +55,9 @@ def build_eval_summary(
             "- Strict `tool_call_accuracy` only scores tools marked `available`.",
             "- `future_mock_unavailable` tools are reasonable future product integrations, so they are reported but excluded from strict scoring.",
             "- Phase 3.6 adds `check_order_state` and `check_usage_state` as local mock business-state tools, so they now count as available tools.",
+            "- Phase 3.7 adds `check_risk_state` as a local mock risk-state tool, so risk-state requirements now count as available tools.",
             "- These mock tools do not connect to a real order system, user system, database, or external API.",
+            "- `route_reason` explains why ToolAgent selected each tool, improving routing auditability.",
             "",
             "## Available Tool Hits",
             "",
@@ -77,12 +79,14 @@ def build_eval_summary(
             "- Records tool calls and risk checks in structured results and traces.",
             "- Uses local policy documents and mock user state instead of free-form guesses.",
             "- Phase 3.6 improves feature-question routing through `search_docs` and adds local mock order/usage checks.",
+            "- Phase 3.7 adds mock risk-state checks and `route_reason` for tool-selection explainability.",
             "",
             "## Current Limitations",
             "",
             "- User state is mock data only.",
             "- Tools are local simulations and do not call real systems.",
             "- Order and usage state are small local mock datasets, not production system integrations.",
+            "- Risk state is also local mock data, not a production risk-control system.",
             "- Eval metrics are heuristic and are not a substitute for production evaluation.",
             "- No real model provider or real database is connected.",
         ]
@@ -124,6 +128,9 @@ def build_failure_analysis(evaluated_by_agent: dict[str, list[dict[str, Any]]]) 
             "- `tool_selection_error` now means an agent missed a required tool marked `available`.",
             "- `future_mock_unavailable` tools are not counted as strict failures because the MVP intentionally does not implement those integrations.",
             "- `check_order_state` and `check_usage_state` are now available local mock tools and are included in strict scoring.",
+            "- `check_risk_state` is now an available local mock tool and is included in strict scoring.",
+            "- `route_reason` helps identify whether a low score came from routing, unavailable state, or answer wording.",
+            "- Unknown risk state is handled as mock `found: false`; it should prompt verification, not a production conclusion.",
             "",
             "## Tasks With Future Tools",
             "",
@@ -150,6 +157,7 @@ def build_failure_analysis(evaluated_by_agent: dict[str, list[dict[str, Any]]]) 
             "- Improve keyword matching for Chinese text and legacy encoded data.",
             "- Add richer mock provider templates for tool-grounded answers.",
             "- Add targeted tests for low-scoring task categories.",
+            "- Use `route_reason` to compare expected routing against actual selected tools.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -163,6 +171,7 @@ def build_tool_trace_report(
     tool_counts: Counter[str] = Counter()
     high_risk_count = 0
     total_tool_calls = 0
+    route_decision_count = 0
 
     if trace_path.exists():
         with trace_path.open("r", encoding="utf-8") as file:
@@ -178,6 +187,8 @@ def build_tool_trace_report(
                 if record.get("event_type") == "tool_call":
                     total_tool_calls += 1
                     tool_counts[str(payload.get("tool_name", "unknown"))] += 1
+                if record.get("event_type") == "route_decision":
+                    route_decision_count += 1
                 if record.get("event_type") == "risk_check":
                     if payload.get("result", {}).get("risk_level") == "high":
                         high_risk_count += 1
@@ -188,6 +199,7 @@ def build_tool_trace_report(
         f"- Trace file: `{_display_path(trace_path, project_root)}`",
         f"- Total tool calls: {total_tool_calls}",
         f"- High-risk answers: {high_risk_count}",
+        f"- Route decision events: {route_decision_count}",
         "",
         "## Tool Call Counts",
         "",
@@ -210,6 +222,7 @@ def build_tool_trace_report(
                 f"- Not applicable tools: {coverage['not_applicable_total']}",
                 "- Future tools are visible in reports but excluded from strict `tool_call_accuracy`.",
                 "- Phase 3.6 local mock business-state tools are included in available-tool tracing and scoring.",
+                "- Phase 3.7 local mock risk-state tools are included in available-tool tracing and scoring.",
                 "",
                 "## Future Tool Tasks",
                 "",
@@ -227,12 +240,14 @@ def build_tool_trace_report(
             "## Debugging Value",
             "",
             "Tracing makes it possible to inspect task starts, retrieval, tool calls, risk checks, final answers, task ends, and errors without changing the agent code.",
+            "`route_decision` events show the routed issue type, selected tools, and route summary, which helps debug tool selection separately from answer quality.",
             "",
             "## Current Tool Coverage Limitations",
             "",
             "- The MVP uses local mock tools only.",
             "- Order and usage checks use local mock data, not real business systems.",
-            "- Payment, invoice, and deeper risk-state checks remain future mock unavailable tools.",
+            "- Risk-state checks use local mock data, not a real risk-control system.",
+            "- Payment and invoice-specific external checks remain future tool candidates.",
             "- A reasonable substitute tool call is shown in `tool_calls`, but it is not treated as a full hit for a distinct future tool.",
         ]
     )

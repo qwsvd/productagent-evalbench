@@ -1,12 +1,14 @@
 # Tool Trace Report
 
 - Trace file: `outputs/agent_trace.jsonl`
-- Total tool calls: 90
+- Total tool calls: 108
 - High-risk answers: 0
+- Route decision events: 20
 
 ## Tool Call Counts
 
 - check_order_state: 7
+- check_risk_state: 18
 - check_usage_state: 9
 - check_user_state: 9
 - classify_issue: 20
@@ -17,15 +19,16 @@
 ## Required Tool Coverage
 
 - Required tools total: 38
-- Available required tools: 37
-- Future mock unavailable tools: 1
+- Available required tools: 38
+- Future mock unavailable tools: 0
 - Not applicable tools: 0
 - Future tools are visible in reports but excluded from strict `tool_call_accuracy`.
 - Phase 3.6 local mock business-state tools are included in available-tool tracing and scoring.
+- Phase 3.7 local mock risk-state tools are included in available-tool tracing and scoring.
 
 ## Future Tool Tasks
 
-- product_009: check_risk_state
+- No tasks contain future mock unavailable tools.
 
 ## Trace Format
 
@@ -34,10 +37,12 @@
 ## Debugging Value
 
 Tracing makes it possible to inspect task starts, retrieval, tool calls, risk checks, final answers, task ends, and errors without changing the agent code.
+`route_decision` events show the routed issue type, selected tools, and route summary, which helps debug tool selection separately from answer quality.
 
 ## Current Tool Coverage Limitations
 
 - The MVP uses local mock tools only.
 - Order and usage checks use local mock data, not real business systems.
-- Payment, invoice, and deeper risk-state checks remain future mock unavailable tools.
+- Risk-state checks use local mock data, not a real risk-control system.
+- Payment and invoice-specific external checks remain future tool candidates.
 - A reasonable substitute tool call is shown in `tool_calls`, but it is not treated as a full hit for a distinct future tool.

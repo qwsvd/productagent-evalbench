@@ -7,6 +7,7 @@ from productagent.models.base import BaseProvider
 from productagent.tool_coverage import split_required_tools
 from productagent.tools import (
     check_order_state,
+    check_risk_state,
     check_usage_state,
     check_user_state,
     classify_issue,
@@ -19,7 +20,7 @@ from productagent.tracing import TraceLogger
 
 
 class ToolAgent:
-    """A minimal local tool-using agent with tracing and risk checks."""
+    """A minimal local tool-using agent with tracing and route explanations."""
 
     name = "tool"
 
@@ -52,6 +53,7 @@ class ToolAgent:
         risk_points = risk_points or []
         coverage = split_required_tools(required_tools, tool_availability=tool_availability)
         tool_calls: list[dict[str, Any]] = []
+        selected_tools: list[dict[str, str]] = []
         retrieved_context: list[dict[str, Any]] = []
         trace_id = self.trace_logger.new_trace_id()
 
@@ -62,121 +64,151 @@ class ToolAgent:
             payload={"user_query": user_query, "task_type": task_type},
         )
 
-        try:
-            classification = self._call_tool(
-                trace_id=trace_id,
-                task_id=task_id,
-                tool_calls=tool_calls,
-                tool_name="classify_issue",
-                func=classify_issue,
-                user_query=user_query,
-            )
-            issue_type = _route_type(user_query, task_type, classification["issue_type"])
-            resolved_user_id = user_id or _extract_user_id(user_query) or "unknown"
-            resolved_order_id = order_id or _extract_order_id(user_query)
-            feature_name = _infer_feature_name(user_query)
+        classification = self._call_tool(
+            trace_id=trace_id,
+            task_id=task_id,
+            tool_calls=tool_calls,
+            selected_tools=selected_tools,
+            tool_name="classify_issue",
+            func=classify_issue,
+            reason="classify the user issue before routing",
+            user_query=user_query,
+        )
+        classified_issue_type = classification.get("issue_type", "unknown") if isinstance(classification, dict) else "unknown"
+        issue_type = _route_type(user_query, task_type, classified_issue_type)
+        resolved_user_id = user_id or _extract_user_id(user_query) or "unknown"
+        resolved_order_id = order_id or _extract_order_id(user_query)
+        feature_name = _infer_feature_name(user_query)
 
+        try:
             if _should_search_docs(issue_type, user_query, task_type):
                 docs_result = self._call_tool(
                     trace_id=trace_id,
                     task_id=task_id,
                     tool_calls=tool_calls,
+                    selected_tools=selected_tools,
                     tool_name="search_docs",
                     func=search_docs,
+                    reason="product or feature question requires product documentation lookup",
                     query=user_query,
                     top_k=self.top_k,
                     docs_dir=self.docs_dir,
                 )
-                retrieved_context.extend(docs_result)
+                if isinstance(docs_result, list):
+                    retrieved_context.extend(docs_result)
+                    result_count = len(docs_result)
+                else:
+                    result_count = 0
                 self._log(
                     trace_id=trace_id,
                     task_id=task_id,
                     event_type="retrieval",
-                    payload={"query": user_query, "result_count": len(docs_result)},
+                    payload={"query": user_query, "result_count": result_count},
                 )
 
             if issue_type == "membership":
-                self._call_user_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+                self._call_user_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, feature_name)
                 policy_result = self._read_policy_tool(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    tool_calls=tool_calls,
-                    policy_name="feature_guide",
+                    trace_id,
+                    task_id,
+                    tool_calls,
+                    selected_tools,
+                    "feature_guide",
+                    "membership and feature usage issues need the feature guide policy",
                 )
                 _append_policy_context(retrieved_context, policy_result)
                 if _needs_order_check(user_query, task_type, required_tools, resolved_order_id):
-                    self._call_order_state(trace_id, task_id, tool_calls, resolved_order_id, resolved_user_id)
+                    self._call_order_state(trace_id, task_id, tool_calls, selected_tools, resolved_order_id, resolved_user_id)
                 if _needs_usage_check(user_query, task_type, required_tools):
-                    self._call_usage_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+                    self._call_usage_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, feature_name)
+                self._call_risk_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, resolved_order_id, issue_type)
 
             elif issue_type == "account":
-                self._call_user_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+                self._call_user_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, feature_name)
                 policy_result = self._read_policy_tool(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    tool_calls=tool_calls,
-                    policy_name="account_policy",
+                    trace_id,
+                    task_id,
+                    tool_calls,
+                    selected_tools,
+                    "account_policy",
+                    "account issues need account policy before any unblock guidance",
                 )
                 _append_policy_context(retrieved_context, policy_result)
+                self._call_risk_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, resolved_order_id, issue_type)
 
             elif issue_type in {"refund", "payment"}:
                 policy_result = self._read_policy_tool(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    tool_calls=tool_calls,
-                    policy_name="refund_policy",
+                    trace_id,
+                    task_id,
+                    tool_calls,
+                    selected_tools,
+                    "refund_policy",
+                    "refund or payment issues require refund policy lookup before any promise",
                 )
                 _append_policy_context(retrieved_context, policy_result)
-                if _needs_order_check(user_query, task_type, required_tools, resolved_order_id):
-                    self._call_order_state(trace_id, task_id, tool_calls, resolved_order_id, resolved_user_id)
+                self._call_order_state(trace_id, task_id, tool_calls, selected_tools, resolved_order_id, resolved_user_id)
                 if _needs_usage_check(user_query, task_type, required_tools):
-                    self._call_usage_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+                    self._call_usage_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, feature_name)
+                self._call_risk_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, resolved_order_id, issue_type)
 
             elif issue_type == "invoice":
                 policy_result = self._read_policy_tool(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    tool_calls=tool_calls,
-                    policy_name="faq",
+                    trace_id,
+                    task_id,
+                    tool_calls,
+                    selected_tools,
+                    "faq",
+                    "invoice issues use FAQ policy and may need order state",
                 )
                 _append_policy_context(retrieved_context, policy_result)
                 if _needs_order_check(user_query, task_type, required_tools, resolved_order_id):
-                    self._call_order_state(trace_id, task_id, tool_calls, resolved_order_id, resolved_user_id)
+                    self._call_order_state(trace_id, task_id, tool_calls, selected_tools, resolved_order_id, resolved_user_id)
+                self._call_risk_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, resolved_order_id, issue_type)
 
             elif issue_type == "product_question":
                 if _needs_user_state_check(user_query, required_tools):
-                    self._call_user_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+                    self._call_user_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, feature_name)
                 if _needs_usage_check(user_query, task_type, required_tools):
-                    self._call_usage_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+                    self._call_usage_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, feature_name)
 
             elif issue_type == "risk_control":
                 policy_result = self._read_policy_tool(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    tool_calls=tool_calls,
-                    policy_name="risk_rules",
+                    trace_id,
+                    task_id,
+                    tool_calls,
+                    selected_tools,
+                    "risk_rules",
+                    "risk-control issues require local risk rules",
                 )
                 _append_policy_context(retrieved_context, policy_result)
+                self._call_risk_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, resolved_order_id, issue_type)
 
             else:
-                ticket_result = self._call_tool(
+                self._call_tool(
                     trace_id=trace_id,
                     task_id=task_id,
                     tool_calls=tool_calls,
+                    selected_tools=selected_tools,
                     tool_name="create_ticket",
                     func=create_ticket,
+                    reason="complaint or unknown issue needs a mock ticket for follow-up",
                     user_id=resolved_user_id,
                     issue_type=issue_type,
                     summary=user_query[:160],
                 )
-                retrieved_context.append(
-                    {
-                        "source_file": "mock_ticket",
-                        "chunk_id": ticket_result["ticket_id"],
-                        "content": f"Created mock ticket {ticket_result['ticket_id']} for {issue_type}.",
-                        "score": 1,
-                    }
-                )
+                self._call_risk_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, resolved_order_id, issue_type)
+
+            route_reason = _build_route_reason(issue_type, selected_tools)
+            self._log(
+                trace_id=trace_id,
+                task_id=task_id,
+                event_type="route_decision",
+                payload={
+                    "issue_type": issue_type,
+                    "selected_tools": selected_tools,
+                    "summary": _route_summary(issue_type),
+                },
+            )
 
             base_answer = self.provider.generate(
                 user_query=user_query,
@@ -197,8 +229,10 @@ class ToolAgent:
                 trace_id=trace_id,
                 task_id=task_id,
                 tool_calls=tool_calls,
+                selected_tools=selected_tools,
                 tool_name="risk_check",
                 func=risk_check,
+                reason="final answer must be checked for risky promises",
                 answer_or_plan=final_answer,
             )
             self._log(
@@ -220,6 +254,7 @@ class ToolAgent:
                 "provider": self.provider.name,
                 "user_query": user_query,
                 "issue_type": issue_type,
+                "route_reason": route_reason,
                 "tool_calls": tool_calls,
                 "retrieved_context": retrieved_context,
                 "final_answer": final_answer,
@@ -264,18 +299,21 @@ class ToolAgent:
 
     def _read_policy_tool(
         self,
-        *,
         trace_id: str,
         task_id: str,
         tool_calls: list[dict[str, Any]],
+        selected_tools: list[dict[str, str]],
         policy_name: str,
+        reason: str,
     ) -> dict[str, Any]:
         return self._call_tool(
             trace_id=trace_id,
             task_id=task_id,
             tool_calls=tool_calls,
+            selected_tools=selected_tools,
             tool_name="read_policy",
             func=read_policy,
+            reason=reason,
             policy_name=policy_name,
             docs_dir=self.docs_dir,
         )
@@ -285,6 +323,7 @@ class ToolAgent:
         trace_id: str,
         task_id: str,
         tool_calls: list[dict[str, Any]],
+        selected_tools: list[dict[str, str]],
         user_id: str,
         feature_name: str | None,
     ) -> dict[str, Any]:
@@ -292,8 +331,10 @@ class ToolAgent:
             trace_id=trace_id,
             task_id=task_id,
             tool_calls=tool_calls,
+            selected_tools=selected_tools,
             tool_name="check_user_state",
             func=check_user_state,
+            reason="user or membership state is needed before giving account-specific guidance",
             user_id=user_id,
             feature_name=feature_name,
         )
@@ -303,6 +344,7 @@ class ToolAgent:
         trace_id: str,
         task_id: str,
         tool_calls: list[dict[str, Any]],
+        selected_tools: list[dict[str, str]],
         order_id: str | None,
         user_id: str,
     ) -> dict[str, Any]:
@@ -310,8 +352,10 @@ class ToolAgent:
             trace_id=trace_id,
             task_id=task_id,
             tool_calls=tool_calls,
+            selected_tools=selected_tools,
             tool_name="check_order_state",
             func=check_order_state,
+            reason="refund or payment issue needs mock order and payment state",
             order_id=order_id,
             user_id=user_id if user_id != "unknown" else None,
         )
@@ -321,6 +365,7 @@ class ToolAgent:
         trace_id: str,
         task_id: str,
         tool_calls: list[dict[str, Any]],
+        selected_tools: list[dict[str, str]],
         user_id: str,
         feature_name: str | None,
     ) -> dict[str, Any]:
@@ -328,10 +373,35 @@ class ToolAgent:
             trace_id=trace_id,
             task_id=task_id,
             tool_calls=tool_calls,
+            selected_tools=selected_tools,
             tool_name="check_usage_state",
             func=check_usage_state,
+            reason="membership and feature usage issues need mock usage and quota state",
             user_id=user_id,
             feature_name=feature_name or "advanced_export",
+        )
+
+    def _call_risk_state(
+        self,
+        trace_id: str,
+        task_id: str,
+        tool_calls: list[dict[str, Any]],
+        selected_tools: list[dict[str, str]],
+        user_id: str,
+        order_id: str | None,
+        issue_type: str,
+    ) -> dict[str, Any]:
+        return self._call_tool(
+            trace_id=trace_id,
+            task_id=task_id,
+            tool_calls=tool_calls,
+            selected_tools=selected_tools,
+            tool_name="check_risk_state",
+            func=check_risk_state,
+            reason="risk state is needed to avoid unsafe promises or bypass guidance",
+            user_id=user_id if user_id != "unknown" else None,
+            order_id=order_id,
+            issue_type=issue_type,
         )
 
     def _call_tool(
@@ -340,17 +410,30 @@ class ToolAgent:
         trace_id: str,
         task_id: str,
         tool_calls: list[dict[str, Any]],
+        selected_tools: list[dict[str, str]],
         tool_name: str,
         func: Callable[..., Any],
+        reason: str,
         **kwargs: Any,
     ) -> Any:
-        result = func(**kwargs)
+        try:
+            result = func(**kwargs)
+        except Exception as exc:
+            result = {"found": False, "error": str(exc)}
+            self._log(
+                trace_id=trace_id,
+                task_id=task_id,
+                event_type="error",
+                payload={"tool_name": tool_name, "error": str(exc)},
+            )
+
         call_record = {
             "tool_name": tool_name,
             "arguments": _safe_arguments(kwargs),
             "result": result,
         }
         tool_calls.append(call_record)
+        selected_tools.append({"tool_name": tool_name, "reason": reason})
         self._log(
             trace_id=trace_id,
             task_id=task_id,
@@ -368,6 +451,34 @@ class ToolAgent:
             event_type=event_type,
             payload=payload,
         )
+
+
+def _build_route_reason(issue_type: str, selected_tools: list[dict[str, str]]) -> dict[str, Any]:
+    return {
+        "issue_type": issue_type,
+        "selected_tools": selected_tools,
+        "not_selected_tools": [
+            {
+                "tool_name": "create_ticket",
+                "reason": "not selected when local policy and state tools can handle the issue",
+            }
+        ]
+        if not any(item["tool_name"] == "create_ticket" for item in selected_tools)
+        else [],
+    }
+
+
+def _route_summary(issue_type: str) -> str:
+    summaries = {
+        "product_question": "Product or feature issue: use docs first.",
+        "refund": "Refund issue: check policy, order state, and risk state before risk_check.",
+        "payment": "Payment issue: check policy, order state, and risk state before risk_check.",
+        "membership": "Membership or usage issue: check user, usage, and risk state.",
+        "account": "Account issue: check user state, account policy, and risk state before unblock guidance.",
+        "invoice": "Invoice issue: check FAQ policy and relevant order/risk state.",
+        "risk_control": "Risk-control issue: check risk rules and risk state.",
+    }
+    return summaries.get(issue_type, "Unknown or complaint issue: create a ticket and check risk state.")
 
 
 def _route_type(user_query: str, task_type: str, classified_issue_type: str) -> str:
@@ -418,16 +529,8 @@ def _infer_feature_name(user_query: str) -> str | None:
     return None
 
 
-def _policy_for_financial_issue(issue_type: str) -> str:
-    if issue_type == "invoice":
-        return "faq"
-    if issue_type == "payment":
-        return "faq"
-    return "refund_policy"
-
-
 def _append_policy_context(retrieved_context: list[dict[str, Any]], policy_result: dict[str, Any]) -> None:
-    if not policy_result.get("found"):
+    if not isinstance(policy_result, dict) or not policy_result.get("found"):
         return
     policy_name = policy_result["policy_name"]
     retrieved_context.append(
@@ -453,9 +556,7 @@ def _compose_tool_answer(
     user_state = _first_tool_result(tool_calls, "check_user_state")
     if user_state:
         if user_state.get("member_status") == "unknown":
-            lines.append(
-                f"- User state for `{user_id}` is unknown in mock data; ask for further verification."
-            )
+            lines.append(f"- User state for `{user_id}` is unknown in mock data; ask for further verification.")
         else:
             lines.append(
                 "- Mock user state: "
@@ -488,6 +589,17 @@ def _compose_tool_answer(
         else:
             lines.append("- Mock usage state was not found; verify user and feature state before concluding.")
 
+    risk_state = _first_tool_result(tool_calls, "check_risk_state")
+    if risk_state:
+        if risk_state.get("found"):
+            lines.append(
+                "- Mock risk state: "
+                f"risk_level={risk_state['risk_level']}, "
+                f"risk_flags={risk_state['risk_flags']}."
+            )
+        else:
+            lines.append("- Mock risk state was not found; verify before confirming state or making promises.")
+
     policy_sources = [
         call["tool_name"]
         for call in tool_calls
@@ -505,7 +617,7 @@ def _compose_tool_answer(
     if ticket_result:
         lines.append(f"- Mock ticket created: {ticket_result['ticket_id']} ({ticket_result['status']}).")
 
-    lines.append("- Next step: verify policy and mock business state before making any promise.")
+    lines.append("- Next step: verify policy and mock business/risk state before making any promise.")
     return "\n".join(lines)
 
 

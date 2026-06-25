@@ -14,6 +14,7 @@ from productagent.eval.metrics import (
 from productagent.models import MockProvider
 from productagent.tools import (
     check_order_state,
+    check_risk_state,
     check_usage_state,
     check_user_state,
     classify_issue,
@@ -66,6 +67,30 @@ def test_check_usage_state_returns_mock_usage_state() -> None:
     assert result["usage_count"] == 2
 
 
+def test_check_risk_state_returns_low_risk_for_user_001() -> None:
+    result = check_risk_state(user_id="user_001")
+
+    assert result["found"] is True
+    assert result["risk_level"] == "low"
+    assert "promise_refund" in result["blocked_actions"]
+
+
+def test_check_risk_state_returns_high_risk_for_user_003() -> None:
+    result = check_risk_state(user_id="user_003")
+
+    assert result["found"] is True
+    assert result["risk_level"] == "high"
+    assert "restricted_account" in result["risk_flags"]
+
+
+def test_check_risk_state_returns_unknown_for_missing_user() -> None:
+    result = check_risk_state(user_id="missing_user")
+
+    assert result["found"] is False
+    assert result["risk_level"] == "unknown"
+    assert "unknown_user_or_state" in result["risk_flags"]
+
+
 def test_risk_check_detects_direct_refund_promise() -> None:
     result = risk_check("We will refund your payment immediately. No review is needed.")
 
@@ -88,9 +113,11 @@ def test_tool_agent_handles_one_task() -> None:
     tool_names = [call["tool_name"] for call in result["tool_calls"]]
     assert result["agent"] == "tool"
     assert result["issue_type"] == "membership"
+    assert result["route_reason"]["issue_type"] == "membership"
     assert "classify_issue" in tool_names
     assert "check_user_state" in tool_names
     assert "read_policy" in tool_names
+    assert "check_risk_state" in tool_names
     assert "risk_check" in tool_names
     assert result["risk_check"]["risk_level"] == "low"
 
@@ -102,17 +129,17 @@ def test_tool_agent_returns_unavailable_required_tools() -> None:
         task_id="tool_future_test",
         user_query="user_001 cannot use batch export because of risk limits",
         task_type="membership_check",
-        required_tools=["check_risk_state", "check_user_state"],
+        required_tools=["check_payment_state", "check_user_state"],
         risk_points=[],
         user_id="user_001",
         tool_availability={
-            "check_risk_state": "future_mock_unavailable",
+            "check_payment_state": "future_mock_unavailable",
             "check_user_state": "available",
         },
     )
 
     assert result["available_required_tools"] == ["check_user_state"]
-    assert result["unavailable_required_tools"] == ["check_risk_state"]
+    assert result["unavailable_required_tools"] == ["check_payment_state"]
     assert "Current MVP has not implemented" in result["tool_coverage_note"]
 
 
@@ -146,6 +173,30 @@ def test_tool_agent_refund_task_calls_check_order_state() -> None:
     tool_names = [call["tool_name"] for call in result["tool_calls"]]
     assert "read_policy" in tool_names
     assert "check_order_state" in tool_names
+    assert "check_risk_state" in tool_names
+
+
+def test_tool_agent_account_task_calls_check_risk_state() -> None:
+    agent = ToolAgent(provider=MockProvider(), top_k=2)
+
+    result = agent.run(
+        task_id="tool_account_test",
+        user_query="user_003 account is restricted, can you unblock it?",
+        task_type="account_limit",
+        required_tools=["check_user_state", "read_policy", "check_risk_state"],
+        tool_availability={
+            "check_user_state": "available",
+            "read_policy": "available",
+            "check_risk_state": "available",
+        },
+        user_id="user_003",
+    )
+
+    tool_names = [call["tool_name"] for call in result["tool_calls"]]
+    assert "check_user_state" in tool_names
+    assert "read_policy" in tool_names
+    assert "check_risk_state" in tool_names
+    assert result["route_reason"]["issue_type"] == "account"
 
 
 def test_tool_agent_membership_usage_task_calls_check_usage_state() -> None:
@@ -186,6 +237,33 @@ def test_trace_logger_writes_jsonl(tmp_path: Path) -> None:
     assert record["event_type"] == "tool_call"
 
 
+def test_tool_agent_writes_route_decision_trace(tmp_path: Path) -> None:
+    trace_path = tmp_path / "agent_trace.jsonl"
+    agent = ToolAgent(provider=MockProvider(), top_k=2, trace_logger=TraceLogger(trace_path))
+
+    agent.run(
+        task_id="trace_route_test",
+        user_query="Can I refund order_002 after payment?",
+        task_type="refund_check",
+        required_tools=["read_policy", "check_order_state", "check_risk_state"],
+        tool_availability={
+            "read_policy": "available",
+            "check_order_state": "available",
+            "check_risk_state": "available",
+        },
+        order_id="order_002",
+    )
+
+    records = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    route_events = [record for record in records if record["event_type"] == "route_decision"]
+    assert len(route_events) == 1
+    assert route_events[0]["payload"]["issue_type"] == "refund"
+
+
 def test_eval_metrics_return_scores() -> None:
     risk_result = {"risk_level": "medium", "risk_points": ["uncertain_without_verification"]}
     answer = "Please check member status. Next, verify the account before making a promise."
@@ -198,10 +276,10 @@ def test_eval_metrics_return_scores() -> None:
 
 def test_tool_call_accuracy_scores_only_available_tools() -> None:
     task = {
-        "required_tools": ["read_policy", "check_risk_state"],
+        "required_tools": ["read_policy", "check_payment_state"],
         "tool_availability": {
             "read_policy": "available",
-            "check_risk_state": "future_mock_unavailable",
+            "check_payment_state": "future_mock_unavailable",
         },
     }
     result = {"tool_calls": [{"tool_name": "read_policy"}]}
@@ -227,10 +305,20 @@ def test_tool_call_accuracy_scores_order_and_usage_as_available() -> None:
     assert tool_call_accuracy(result, task) == 1.0
 
 
-def test_future_mock_unavailable_does_not_penalize_accuracy() -> None:
+def test_tool_call_accuracy_scores_risk_state_as_available() -> None:
     task = {
         "required_tools": ["check_risk_state"],
-        "tool_availability": {"check_risk_state": "future_mock_unavailable"},
+        "tool_availability": {"check_risk_state": "available"},
+    }
+    result = {"tool_calls": [{"tool_name": "check_risk_state"}]}
+
+    assert tool_call_accuracy(result, task) == 1.0
+
+
+def test_future_mock_unavailable_does_not_penalize_accuracy() -> None:
+    task = {
+        "required_tools": ["check_payment_state"],
+        "tool_availability": {"check_payment_state": "future_mock_unavailable"},
     }
     result = {"tool_calls": []}
 
@@ -279,3 +367,13 @@ def test_product_tasks_jsonl_is_valid_json() -> None:
 
     assert len(records) >= 20
     assert all("tool_availability" in record for record in records)
+
+
+def test_readme_has_no_stale_phase_2_limitations() -> None:
+    content = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "Phase 3.7: Risk State Tool and Route Reason" in content
+    assert "还没有 Tools" not in content
+    assert "还没有 Tracing" not in content
+    assert "还没有自动评分系统" not in content
+    assert "还没有 Tools、Tracing、自动评分系统" not in content
