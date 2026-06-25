@@ -65,6 +65,18 @@ reports/tool_trace_report.md
 reports/rag_comparison.md
 ```
 
+### Tool Coverage and Eval Fairness
+
+`ToolAgent` uses local mock tools only. The task set separates required tools into `available`, `future_mock_unavailable`, and `not_applicable` through the `tool_availability` field.
+
+Eval only applies strict `tool_call_accuracy` scoring to tools marked `available`. `future_mock_unavailable` means the tool is reasonable in a real product system, but the current offline MVP intentionally does not implement it. This avoids treating a future integration gap, such as order-state or usage-state lookup, as a current Agent tool-selection error.
+
+For details, see:
+
+```text
+docs/tool_coverage.md
+```
+
 ### Phase 3 Limitations
 
 1. User state is mock data.

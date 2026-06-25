@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from productagent.data_loader import PROJECT_ROOT
 from productagent.models.base import BaseProvider
+from productagent.tool_coverage import split_required_tools
 from productagent.tools import (
     check_user_state,
     classify_issue,
@@ -41,9 +42,12 @@ class ToolAgent:
         required_tools: list[str] | None = None,
         risk_points: list[str] | None = None,
         user_id: str | None = None,
+        tool_availability: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         expected_answer_points = expected_answer_points or []
+        required_tools = required_tools or []
         risk_points = risk_points or []
+        coverage = split_required_tools(required_tools, tool_availability=tool_availability)
         tool_calls: list[dict[str, Any]] = []
         retrieved_context: list[dict[str, Any]] = []
         trace_id = self.trace_logger.new_trace_id()
@@ -78,24 +82,20 @@ class ToolAgent:
                     feature_name=_infer_feature_name(user_query),
                 )
                 policy_name = "account_policy" if issue_type == "account" else "feature_guide"
-                policy_call_name = "read_account_policy" if issue_type == "account" else "read_feature_guide"
                 policy_result = self._read_policy_tool(
                     trace_id=trace_id,
                     task_id=task_id,
                     tool_calls=tool_calls,
-                    tool_name=policy_call_name,
                     policy_name=policy_name,
                 )
                 _append_policy_context(retrieved_context, policy_result)
 
             elif issue_type in {"refund", "payment", "invoice"}:
                 policy_name = _policy_for_financial_issue(issue_type)
-                policy_call_name = _policy_call_name(policy_name)
                 policy_result = self._read_policy_tool(
                     trace_id=trace_id,
                     task_id=task_id,
                     tool_calls=tool_calls,
-                    tool_name=policy_call_name,
                     policy_name=policy_name,
                 )
                 _append_policy_context(retrieved_context, policy_result)
@@ -135,7 +135,6 @@ class ToolAgent:
                         trace_id=trace_id,
                         task_id=task_id,
                         tool_calls=tool_calls,
-                        tool_name="read_risk_rules",
                         policy_name="risk_rules",
                     )
                     _append_policy_context(retrieved_context, policy_result)
@@ -194,6 +193,11 @@ class ToolAgent:
                 "retrieved_context": retrieved_context,
                 "final_answer": final_answer,
                 "risk_check": risk_result,
+                "required_tools": required_tools,
+                "available_required_tools": coverage["available"],
+                "unavailable_required_tools": coverage["future_mock_unavailable"],
+                "not_applicable_required_tools": coverage["not_applicable"],
+                "tool_coverage_note": _tool_coverage_note(coverage),
                 "expected_answer_points": expected_answer_points,
                 "risk_points": risk_points,
             }
@@ -223,6 +227,7 @@ class ToolAgent:
             required_tools=task.get("required_tools", []),
             risk_points=task.get("risk_points", []),
             user_id=task.get("user_id"),
+            tool_availability=task.get("tool_availability"),
         )
 
     def _read_policy_tool(
@@ -231,14 +236,13 @@ class ToolAgent:
         trace_id: str,
         task_id: str,
         tool_calls: list[dict[str, Any]],
-        tool_name: str,
         policy_name: str,
     ) -> dict[str, Any]:
         return self._call_tool(
             trace_id=trace_id,
             task_id=task_id,
             tool_calls=tool_calls,
-            tool_name=tool_name,
+            tool_name="read_policy",
             func=read_policy,
             policy_name=policy_name,
             docs_dir=self.docs_dir,
@@ -308,16 +312,6 @@ def _policy_for_financial_issue(issue_type: str) -> str:
     return "refund_policy"
 
 
-def _policy_call_name(policy_name: str) -> str:
-    return {
-        "refund_policy": "read_refund_policy",
-        "account_policy": "read_account_policy",
-        "risk_rules": "read_risk_rules",
-        "feature_guide": "read_feature_guide",
-        "faq": "read_faq",
-    }.get(policy_name, "read_policy")
-
-
 def _append_policy_context(retrieved_context: list[dict[str, Any]], policy_result: dict[str, Any]) -> None:
     if not policy_result.get("found"):
         return
@@ -375,6 +369,28 @@ def _compose_tool_answer(
 
     lines.append("- Next step: verify policy and user/order state before making any promise.")
     return "\n".join(lines)
+
+
+def _tool_coverage_note(coverage: dict[str, list[str]]) -> str:
+    future_tools = coverage["future_mock_unavailable"]
+    not_applicable_tools = coverage["not_applicable"]
+
+    notes: list[str] = []
+    if future_tools:
+        notes.append(
+            "Current MVP has not implemented these future tools: "
+            + ", ".join(future_tools)
+            + ". Local available tools were used for approximate handling."
+        )
+    if not_applicable_tools:
+        notes.append(
+            "These required tools are marked not_applicable for strict tool scoring: "
+            + ", ".join(not_applicable_tools)
+            + "."
+        )
+    if not notes:
+        notes.append("All required tools for strict scoring are available in the MVP tool set.")
+    return " ".join(notes)
 
 
 def _first_tool_result(tool_calls: list[dict[str, Any]], tool_name: str) -> Any | None:

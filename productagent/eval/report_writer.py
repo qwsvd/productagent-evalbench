@@ -3,6 +3,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from productagent.tool_coverage import split_required_tools
+
 
 def build_eval_summary(
     evaluated_by_agent: dict[str, list[dict[str, Any]]],
@@ -10,6 +12,7 @@ def build_eval_summary(
     task_count: int,
     project_root: Path,
 ) -> str:
+    coverage = _coverage_summary(evaluated_by_agent)
     lines = [
         "# Eval Summary",
         "",
@@ -43,6 +46,29 @@ def build_eval_summary(
     lines.extend(
         [
             "",
+            "## Tool Coverage Fairness",
+            "",
+            f"- Required tools total: {coverage['required_tools_total']}",
+            f"- Available required tools: {coverage['available_required_tools_total']}",
+            f"- Future mock unavailable tools: {coverage['future_mock_unavailable_total']}",
+            f"- Not applicable tools: {coverage['not_applicable_total']}",
+            "- Strict `tool_call_accuracy` only scores tools marked `available`.",
+            "- `future_mock_unavailable` tools are reasonable future product integrations, so they are reported but excluded from strict scoring.",
+            "",
+            "## Available Tool Hits",
+            "",
+            "| Agent | Available Hits | Available Total | Strict Tool Accuracy |",
+            "| --- | ---: | ---: | ---: |",
+        ]
+    )
+    lines.extend(_agent_tool_hit_rows(evaluated_by_agent))
+
+    lines.extend(["", "## Future Tool Tasks", ""])
+    lines.extend(_format_future_tasks(coverage))
+
+    lines.extend(
+        [
+            "",
             "## ToolAgent Improvements",
             "",
             "- Adds deterministic local tool calls before the final answer.",
@@ -61,6 +87,7 @@ def build_eval_summary(
 
 
 def build_failure_analysis(evaluated_by_agent: dict[str, list[dict[str, Any]]]) -> str:
+    coverage = _coverage_summary(evaluated_by_agent)
     lines = ["# Failure Analysis", "", "## Low-Scoring Tasks", ""]
     low_rows: list[str] = []
     reason_counts: Counter[str] = Counter()
@@ -85,6 +112,19 @@ def build_failure_analysis(evaluated_by_agent: dict[str, list[dict[str, Any]]]) 
                 )
 
     lines.extend(low_rows or ["- No low-scoring tasks found by the current heuristic."])
+    lines.extend(
+        [
+            "",
+            "## Tool Availability Notes",
+            "",
+            "- `tool_selection_error` now means an agent missed a required tool marked `available`.",
+            "- `future_mock_unavailable` tools are not counted as strict failures because the MVP intentionally does not implement those integrations.",
+            "",
+            "## Tasks With Future Tools",
+            "",
+        ]
+    )
+    lines.extend(_format_future_tasks(coverage))
     lines.extend(["", "## Failure Reason Categories", ""])
     categories = [
         "retrieval_failure",
@@ -110,7 +150,11 @@ def build_failure_analysis(evaluated_by_agent: dict[str, list[dict[str, Any]]]) 
     return "\n".join(lines) + "\n"
 
 
-def build_tool_trace_report(trace_path: Path, project_root: Path) -> str:
+def build_tool_trace_report(
+    trace_path: Path,
+    project_root: Path,
+    evaluated_by_agent: dict[str, list[dict[str, Any]]] | None = None,
+) -> str:
     tool_counts: Counter[str] = Counter()
     high_risk_count = 0
     total_tool_calls = 0
@@ -148,6 +192,25 @@ def build_tool_trace_report(trace_path: Path, project_root: Path) -> str:
     else:
         lines.append("- No tool calls recorded.")
 
+    if evaluated_by_agent is not None:
+        coverage = _coverage_summary(evaluated_by_agent)
+        lines.extend(
+            [
+                "",
+                "## Required Tool Coverage",
+                "",
+                f"- Required tools total: {coverage['required_tools_total']}",
+                f"- Available required tools: {coverage['available_required_tools_total']}",
+                f"- Future mock unavailable tools: {coverage['future_mock_unavailable_total']}",
+                f"- Not applicable tools: {coverage['not_applicable_total']}",
+                "- Future tools are visible in reports but excluded from strict `tool_call_accuracy`.",
+                "",
+                "## Future Tool Tasks",
+                "",
+            ]
+        )
+        lines.extend(_format_future_tasks(coverage))
+
     lines.extend(
         [
             "",
@@ -158,6 +221,12 @@ def build_tool_trace_report(trace_path: Path, project_root: Path) -> str:
             "## Debugging Value",
             "",
             "Tracing makes it possible to inspect task starts, retrieval, tool calls, risk checks, final answers, task ends, and errors without changing the agent code.",
+            "",
+            "## Current Tool Coverage Limitations",
+            "",
+            "- The MVP uses local mock tools only.",
+            "- Order, usage, payment, invoice, and deeper risk-state checks are represented as future mock unavailable tools.",
+            "- A reasonable substitute tool call is shown in `tool_calls`, but it is not treated as a full hit for a distinct future tool.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -186,6 +255,59 @@ def _average(evaluated_items: list[dict[str, Any]], metric_name: str) -> float:
         return 0.0
     values = [item["metrics"][metric_name] for item in evaluated_items]
     return sum(values) / len(values)
+
+
+def _coverage_summary(evaluated_by_agent: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    tasks_by_id: dict[str, dict[str, Any]] = {}
+    for evaluated_items in evaluated_by_agent.values():
+        for item in evaluated_items:
+            task = item.get("task", {})
+            task_id = task.get("task_id") or item.get("task_id")
+            if task_id and task_id not in tasks_by_id:
+                tasks_by_id[str(task_id)] = task
+
+    summary: dict[str, Any] = {
+        "required_tools_total": 0,
+        "available_required_tools_total": 0,
+        "future_mock_unavailable_total": 0,
+        "not_applicable_total": 0,
+        "future_tasks": [],
+    }
+    for task_id, task in sorted(tasks_by_id.items()):
+        required_tools = task.get("required_tools", []) or []
+        split = split_required_tools(required_tools, task.get("tool_availability"))
+        summary["required_tools_total"] += len(required_tools)
+        summary["available_required_tools_total"] += len(split["available"])
+        summary["future_mock_unavailable_total"] += len(split["future_mock_unavailable"])
+        summary["not_applicable_total"] += len(split["not_applicable"])
+        if split["future_mock_unavailable"]:
+            summary["future_tasks"].append(
+                {
+                    "task_id": task_id,
+                    "tools": split["future_mock_unavailable"],
+                }
+            )
+    return summary
+
+
+def _agent_tool_hit_rows(evaluated_by_agent: dict[str, list[dict[str, Any]]]) -> list[str]:
+    rows: list[str] = []
+    for agent_name, evaluated_items in evaluated_by_agent.items():
+        hit_count = sum(item["metrics"].get("available_tool_hit_count", 0) for item in evaluated_items)
+        total = sum(item["metrics"].get("available_tool_total", 0) for item in evaluated_items)
+        accuracy = hit_count / total if total else 0
+        rows.append(f"| {agent_name} | {hit_count} | {total} | {accuracy:.3f} |")
+    return rows
+
+
+def _format_future_tasks(coverage: dict[str, Any]) -> list[str]:
+    future_tasks = coverage.get("future_tasks", [])
+    if not future_tasks:
+        return ["- No tasks contain future mock unavailable tools."]
+    return [
+        f"- {item['task_id']}: {', '.join(item['tools'])}"
+        for item in future_tasks
+    ]
 
 
 def _display_path(path: Path, project_root: Path) -> str:

@@ -1,0 +1,52 @@
+# Tool Coverage
+
+## Implemented Tools
+
+- `search_docs`: Searches local product Markdown documents through the existing keyword retriever.
+- `read_policy`: Reads one supported local policy document from `data/product_docs/`.
+- `check_user_state`: Returns deterministic mock user state for a small built-in user set.
+- `classify_issue`: Classifies a user query with simple keyword rules.
+- `create_ticket`: Creates a deterministic mock ticket record.
+- `risk_check`: Checks an answer or plan for high-risk promises.
+
+## Future Mock Unavailable Tools
+
+- `check_order_state`
+- `check_usage_state`
+- `check_payment_state`
+- `check_invoice_state`
+- `check_risk_state`
+
+These tools are reasonable for a real product support agent, but this MVP does not connect to orders, usage records, payments, invoices, risk systems, databases, or external APIs.
+
+## Why Not Implement Every Tool In The MVP
+
+The current project is an offline eval bench. Its goal is to test task flow, local tool selection, tracing, and heuristic evaluation without API keys or production systems. Implementing order, payment, invoice, and risk-state checks would require mock schemas and business logic that are larger than this stage.
+
+## `tool_availability`
+
+Each task can mark required tools with:
+
+- `available`: The tool exists in the current local MVP tool set and is included in strict `tool_call_accuracy`.
+- `future_mock_unavailable`: The tool is reasonable for a future product system but intentionally unavailable in this MVP. It is reported, but not counted as a strict miss.
+- `not_applicable`: The tool is not reasonable for the task or should not be used. It is excluded from strict scoring.
+
+Example:
+
+```json
+{
+  "required_tools": ["read_policy", "check_order_state"],
+  "tool_availability": {
+    "read_policy": "available",
+    "check_order_state": "future_mock_unavailable"
+  }
+}
+```
+
+## Eval Handling
+
+`tool_call_accuracy` only scores required tools marked `available`.
+
+`future_mock_unavailable` tools remain visible in reports so reviewers can see capability gaps, but they do not lower strict tool accuracy. This prevents a future integration gap from being mistaken for a current ToolAgent selection error.
+
+If ToolAgent calls a reasonable substitute, such as `search_docs` or `read_policy`, that call remains visible in `tool_calls` and traces. It is not treated as a full hit for a distinct future tool such as `check_order_state`.

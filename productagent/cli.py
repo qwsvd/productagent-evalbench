@@ -130,7 +130,14 @@ def compare_agents(
         eval_summary_path,
     )
     write_markdown(build_failure_analysis(evaluated_by_agent), failure_analysis_path)
-    write_markdown(build_tool_trace_report(trace_path=trace_path, project_root=root), tool_trace_report_path)
+    write_markdown(
+        build_tool_trace_report(
+            trace_path=trace_path,
+            project_root=root,
+            evaluated_by_agent=evaluated_by_agent,
+        ),
+        tool_trace_report_path,
+    )
 
     return_path = eval_summary_path
     if "baseline" in results_by_agent and "rag" in results_by_agent:

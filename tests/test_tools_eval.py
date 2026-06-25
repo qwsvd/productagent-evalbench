@@ -8,6 +8,7 @@ from productagent.eval.metrics import (
     context_usage_score,
     hallucination_risk,
     task_success_score,
+    tool_call_accuracy,
     user_experience_score,
 )
 from productagent.models import MockProvider
@@ -64,9 +65,30 @@ def test_tool_agent_handles_one_task() -> None:
     assert result["issue_type"] == "membership"
     assert "classify_issue" in tool_names
     assert "check_user_state" in tool_names
-    assert "read_feature_guide" in tool_names
+    assert "read_policy" in tool_names
     assert "risk_check" in tool_names
     assert result["risk_check"]["risk_level"] == "low"
+
+
+def test_tool_agent_returns_unavailable_required_tools() -> None:
+    agent = ToolAgent(provider=MockProvider(), top_k=2)
+
+    result = agent.run(
+        task_id="tool_future_test",
+        user_query="user_001 paid but membership is not active",
+        task_type="membership_check",
+        required_tools=["check_order_state", "check_user_state"],
+        risk_points=[],
+        user_id="user_001",
+        tool_availability={
+            "check_order_state": "future_mock_unavailable",
+            "check_user_state": "available",
+        },
+    )
+
+    assert result["available_required_tools"] == ["check_user_state"]
+    assert result["unavailable_required_tools"] == ["check_order_state"]
+    assert "Current MVP has not implemented" in result["tool_coverage_note"]
 
 
 def test_trace_logger_writes_jsonl(tmp_path: Path) -> None:
@@ -100,6 +122,29 @@ def test_eval_metrics_return_scores() -> None:
     assert context_usage_score({"retrieved_context": [{"source_file": "faq.md"}]}) == 1
 
 
+def test_tool_call_accuracy_scores_only_available_tools() -> None:
+    task = {
+        "required_tools": ["read_policy", "check_order_state"],
+        "tool_availability": {
+            "read_policy": "available",
+            "check_order_state": "future_mock_unavailable",
+        },
+    }
+    result = {"tool_calls": [{"tool_name": "read_policy"}]}
+
+    assert tool_call_accuracy(result, task) == 1.0
+
+
+def test_future_mock_unavailable_does_not_penalize_accuracy() -> None:
+    task = {
+        "required_tools": ["check_order_state"],
+        "tool_availability": {"check_order_state": "future_mock_unavailable"},
+    }
+    result = {"tool_calls": []}
+
+    assert tool_call_accuracy(result, task) is None
+
+
 def test_cli_run_tool_writes_results(tmp_path: Path) -> None:
     output_path = tmp_path / "tool_results.jsonl"
 
@@ -130,3 +175,7 @@ def test_cli_compare_three_agents_generates_eval_summary() -> None:
     assert report_path.exists()
     assert (PROJECT_ROOT / "reports" / "failure_analysis.md").exists()
     assert (PROJECT_ROOT / "reports" / "tool_trace_report.md").exists()
+
+
+def test_tool_coverage_doc_exists() -> None:
+    assert (PROJECT_ROOT / "docs" / "tool_coverage.md").exists()

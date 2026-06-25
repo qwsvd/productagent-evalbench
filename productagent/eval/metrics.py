@@ -1,6 +1,8 @@
 import re
 from typing import Any
 
+from productagent.tool_coverage import called_tool_names, split_required_tools, tool_matches
+
 
 def task_success_score(final_answer: str, expected_answer_points: list[str] | None) -> float:
     expected_answer_points = expected_answer_points or []
@@ -28,23 +30,41 @@ def tool_call_accuracy(result: dict[str, Any], task: dict[str, Any]) -> float | 
     if not required_tools:
         return None
 
-    called_tools = {
-        str(call.get("tool_name", "")).lower()
-        for call in result.get("tool_calls", [])
-        if isinstance(call, dict)
-    }
-    normalized_called_tools = set(called_tools)
-    for tool_name in list(called_tools):
-        normalized_called_tools.update(_tool_aliases(tool_name))
+    split_tools = split_required_tools(required_tools, task.get("tool_availability"))
+    available_required_tools = split_tools["available"]
+    if not available_required_tools:
+        return None
 
+    called_tools = called_tool_names(result)
     covered = 0
-    for required_tool in required_tools:
-        required_name = str(required_tool).lower()
-        accepted_names = {required_name, *_tool_aliases(required_name)}
-        if normalized_called_tools & accepted_names:
+    for required_tool in available_required_tools:
+        if tool_matches(called_tools, required_tool):
             covered += 1
 
-    return round(covered / len(required_tools), 3)
+    return round(covered / len(available_required_tools), 3)
+
+
+def tool_call_accuracy_details(result: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    required_tools = task.get("required_tools", []) or []
+    split_tools = split_required_tools(required_tools, task.get("tool_availability"))
+    called_tools = called_tool_names(result)
+    hit_tools = [
+        tool_name
+        for tool_name in split_tools["available"]
+        if tool_matches(called_tools, tool_name)
+    ]
+
+    return {
+        "required_tools_total": len(required_tools),
+        "available_required_tools": split_tools["available"],
+        "future_mock_unavailable_tools": split_tools["future_mock_unavailable"],
+        "not_applicable_tools": split_tools["not_applicable"],
+        "available_tool_hits": hit_tools,
+        "available_tool_hit_count": len(hit_tools),
+        "available_tool_total": len(split_tools["available"]),
+        "future_mock_unavailable_count": len(split_tools["future_mock_unavailable"]),
+        "not_applicable_count": len(split_tools["not_applicable"]),
+    }
 
 
 def hallucination_risk(risk_check_result: dict[str, Any] | None) -> float:
@@ -96,12 +116,14 @@ def user_experience_score(final_answer: str, risk_check_result: dict[str, Any] |
 def evaluate_result(result: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
     risk_result = result.get("risk_check") or {"risk_level": "low", "risk_points": []}
     final_answer = result.get("final_answer", "")
+    accuracy_details = tool_call_accuracy_details(result, task)
     return {
         "task_success_score": task_success_score(final_answer, task.get("expected_answer_points", [])),
         "tool_call_accuracy": tool_call_accuracy(result, task),
         "hallucination_risk": hallucination_risk(risk_result),
         "context_usage_score": context_usage_score(result),
         "user_experience_score": user_experience_score(final_answer, risk_result),
+        **accuracy_details,
     }
 
 
@@ -113,21 +135,3 @@ def _terms(text: str) -> set[str]:
         terms.add("".join(cjk_chars[index : index + 2]))
     return terms
 
-
-def _tool_aliases(tool_name: str) -> set[str]:
-    aliases = {
-        "read_policy": {
-            "read_policy",
-            "read_refund_policy",
-            "read_account_policy",
-            "read_risk_rules",
-            "read_feature_guide",
-            "read_faq",
-        },
-        "check_user_state": {"check_user_state", "check_account_state", "check_risk_state"},
-        "risk_check": {"risk_check", "check_risk_state"},
-    }
-    for canonical_name, names in aliases.items():
-        if tool_name in names:
-            return {canonical_name, *names}
-    return {tool_name}
