@@ -1,6 +1,8 @@
 # Eval Summary
 
 - Total tasks: 20
+- Provider: mock
+- Provider mode: mock
 
 ## Result Files
 
@@ -30,6 +32,8 @@
 - `route_reason` explains why ToolAgent selected each tool, improving routing auditability.
 - Phase 4 adds DeepSeek, Qwen, OpenAI, and Gemini provider-layer support through `OpenAICompatibleProvider`.
 - This report does not fabricate real-model effects. Mock metrics and real-provider metrics should be reviewed separately.
+- Phase 5 adds run metadata, result schema checks, benchmark manifests, and explicit provider evaluation isolation.
+- The main reproducible benchmark is the mock-provider run. External provider runs must be reported separately.
 
 ## Available Tool Hits
 
@@ -51,6 +55,7 @@
 - Phase 3.6 improves feature-question routing through `search_docs` and adds local mock order/usage checks.
 - Phase 3.7 adds mock risk-state checks and `route_reason` for tool-selection explainability.
 - Phase 4 adds a real-provider engineering layer while keeping mock runs reproducible by default.
+- Phase 5 separates mock evaluation from external-provider evaluation and writes `reports/benchmark_manifest.json`.
 
 ## Current Limitations
 

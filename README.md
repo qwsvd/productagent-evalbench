@@ -1,8 +1,40 @@
 # ProductAgent-EvalBench
 
-ProductAgent-EvalBench is a local MVP eval bench for product-support agents. It compares a baseline agent, a RAG agent, and a tool-using agent on a fixed product task set. Mock runs need no real model APIs, real databases, external services, LangChain, LlamaIndex, or vector databases.
+A local, reproducible Agent evaluation bench for product-support tasks.
 
-The project focuses on agent engineering signals: retrieval context, local tool calls, tracing, heuristic eval, and fair tool coverage reporting.
+It compares:
+
+- `BaselineAgent`
+- `RagAgent`
+- `ToolAgent`
+
+It demonstrates:
+
+- retrieval context
+- local mock tools
+- route reasoning
+- tracing
+- heuristic eval
+- fair tool coverage scoring
+- Provider abstraction for DeepSeek / Qwen / OpenAI / Gemini
+- strict separation between mock eval and external-provider eval
+
+Mock runs need no real model APIs, real databases, external services, LangChain, LlamaIndex, or vector databases.
+
+## Quick Start
+
+```bash
+python -m pytest -q
+python -m productagent.cli providers
+python -m productagent.cli compare --agents baseline,rag,tool --provider mock --task-set product_tasks
+```
+
+## Current Status
+
+- Mock eval: supported and fully offline.
+- External providers: configurable but not used in default tests.
+- API keys: never committed.
+- Real model benchmark: not claimed unless separately run.
 
 ## Current Agents
 
@@ -191,6 +223,18 @@ Set `GEMINI_API_KEY`, `GEMINI_BASE_URL`, `GEMINI_MODEL`, and `GEMINI_TIMEOUT_SEC
 - Do not write keys into GitHub, README, tests, reports, outputs, or source files.
 - Tests do not need keys.
 - Mock provider runs the full local project without keys.
+
+## Phase 5: Provider Evaluation Isolation and Benchmark Pack
+
+Phase 5 adds:
+
+- run metadata with `run_id`, `provider_mode`, `task_set`, `schema_version`, and timestamp.
+- stable result schema validation for JSONL records.
+- benchmark manifest generation at `reports/benchmark_manifest.json`.
+- provider eval isolation reporting at `reports/provider_eval_isolation.md`.
+- a reproducibility runbook at `docs/runbook.md`.
+
+The default benchmark remains the offline mock run. External-provider runs are supported by configuration but must be evaluated and reported separately.
 
 ## Install
 

@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Mapping, Sequence
@@ -45,8 +46,10 @@ class OpenAICompatibleProvider(BaseProvider):
         risk_points: Sequence[str] | None = None,
         retrieved_context: Sequence[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        start_time = time.perf_counter()
         config_error = self.validate_config()
         if config_error is not None:
+            config_error["latency_ms"] = self._elapsed_ms(start_time)
             return config_error
 
         payload = self.build_payload(
@@ -63,19 +66,21 @@ class OpenAICompatibleProvider(BaseProvider):
                 response_body = response.read().decode("utf-8")
             response_json = json.loads(response_body)
         except TimeoutError:
-            return self.provider_error("provider_timeout", "Provider request timed out.", retryable=True)
+            return self.provider_error("provider_timeout", "Provider request timed out.", retryable=True, latency_ms=self._elapsed_ms(start_time))
         except socket.timeout:
-            return self.provider_error("provider_timeout", "Provider request timed out.", retryable=True)
+            return self.provider_error("provider_timeout", "Provider request timed out.", retryable=True, latency_ms=self._elapsed_ms(start_time))
         except urllib.error.URLError as exc:
             if "timed out" in str(exc).lower():
-                return self.provider_error("provider_timeout", "Provider request timed out.", retryable=True)
-            return self.provider_error("provider_request_failed", "Provider request failed.", retryable=True)
+                return self.provider_error("provider_timeout", "Provider request timed out.", retryable=True, latency_ms=self._elapsed_ms(start_time))
+            return self.provider_error("provider_request_failed", "Provider request failed.", retryable=True, latency_ms=self._elapsed_ms(start_time))
         except OSError:
-            return self.provider_error("provider_request_failed", "Provider request failed.", retryable=True)
+            return self.provider_error("provider_request_failed", "Provider request failed.", retryable=True, latency_ms=self._elapsed_ms(start_time))
         except json.JSONDecodeError:
-            return self.provider_error("provider_response_invalid", "Provider returned invalid JSON.", retryable=False)
+            return self.provider_error("provider_response_invalid", "Provider returned invalid JSON.", retryable=False, latency_ms=self._elapsed_ms(start_time))
 
-        return self.parse_response(response_json)
+        parsed = self.parse_response(response_json)
+        parsed["latency_ms"] = self._elapsed_ms(start_time)
+        return parsed
 
     def build_payload(
         self,
@@ -132,6 +137,9 @@ class OpenAICompatibleProvider(BaseProvider):
             "status": "ok",
             "text": str(text),
             "raw_response": response_json,
+            "latency_ms": None,
+            "estimated_cost_usd": None,
+            "token_usage": response_json.get("usage", {}),
         }
 
     def validate_config(self) -> dict[str, Any] | None:
@@ -156,7 +164,13 @@ class OpenAICompatibleProvider(BaseProvider):
             "timeout_seconds": self.timeout_seconds,
         }
 
-    def provider_error(self, code: str, message: str, retryable: bool = False) -> dict[str, Any]:
+    def provider_error(
+        self,
+        code: str,
+        message: str,
+        retryable: bool = False,
+        latency_ms: int | None = None,
+    ) -> dict[str, Any]:
         return {
             "provider": self.provider_name,
             "model": self.model_name or self.default_model,
@@ -164,6 +178,9 @@ class OpenAICompatibleProvider(BaseProvider):
             "error_code": code,
             "error_message": message,
             "retryable": retryable,
+            "latency_ms": latency_ms,
+            "estimated_cost_usd": None,
+            "token_usage": {},
         }
 
     def _chat_completions_url(self) -> str:
@@ -181,6 +198,9 @@ class OpenAICompatibleProvider(BaseProvider):
         except ValueError:
             return self.default_timeout_seconds
         return max(1, parsed)
+
+    def _elapsed_ms(self, start_time: float) -> int:
+        return int((time.perf_counter() - start_time) * 1000)
 
     def _build_prompt(
         self,

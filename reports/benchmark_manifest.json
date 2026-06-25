@@ -1,0 +1,34 @@
+{
+  "project": "ProductAgent-EvalBench",
+  "phase": "Phase 5",
+  "task_set": "product_tasks",
+  "agents": [
+    "baseline",
+    "rag",
+    "tool"
+  ],
+  "provider": "mock",
+  "provider_mode": "mock",
+  "outputs": [
+    "outputs/baseline_mock_results.jsonl",
+    "outputs/rag_mock_results.jsonl",
+    "outputs/tool_mock_results.jsonl"
+  ],
+  "reports": [
+    "reports/eval_summary.md",
+    "reports/failure_analysis.md",
+    "reports/tool_trace_report.md",
+    "reports/provider_eval_isolation.md",
+    "reports/benchmark_manifest.json",
+    "reports/rag_comparison.md"
+  ],
+  "schema_version": "1.0",
+  "notes": [
+    "Mock results do not represent real DeepSeek/Qwen/OpenAI/Gemini performance.",
+    "External provider evaluation should be run and reported separately."
+  ],
+  "schema_validation": {
+    "valid": true,
+    "errors": []
+  }
+}

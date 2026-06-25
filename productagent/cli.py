@@ -3,11 +3,13 @@ from pathlib import Path
 from typing import Any
 
 from productagent.agents import BaselineAgent, RagAgent, ToolAgent
+from productagent.benchmark_manifest import build_benchmark_manifest, write_benchmark_manifest
 from productagent.data_loader import PROJECT_ROOT, load_task_set
 from productagent.eval import evaluate_results_by_agent
 from productagent.eval.report_writer import (
     build_eval_summary,
     build_failure_analysis,
+    build_provider_eval_isolation_report,
     build_tool_trace_report,
 )
 from productagent.models import (
@@ -19,6 +21,8 @@ from productagent.models import (
     QwenProvider,
 )
 from productagent.output_writer import write_jsonl, write_markdown
+from productagent.result_schema import attach_result_metadata
+from productagent.run_metadata import create_run_metadata
 from productagent.tracing import TraceLogger
 
 
@@ -66,6 +70,7 @@ def run_task_set(
     project_root: str | Path | None = None,
     top_k: int = 3,
     trace_logger: TraceLogger | None = None,
+    eval_mode: str | None = None,
 ) -> list[dict[str, Any]]:
     root = Path(project_root) if project_root else PROJECT_ROOT
     normalized_agent = _normalize_agent_name(agent_name)
@@ -76,11 +81,22 @@ def run_task_set(
         raise ValueError(f"Unsupported provider: {provider_name}")
 
     provider = build_provider(normalized_provider)
+    resolved_eval_mode = _resolve_eval_mode(normalized_provider, eval_mode)
+    provider_status = provider_config_statuses().get(normalized_provider)
+    run_metadata = create_run_metadata(
+        agent_name=normalized_agent,
+        provider_name=normalized_provider,
+        task_set=task_set,
+        eval_mode=resolved_eval_mode,
+        provider_config_status=provider_status,
+    )
     trace_logger = trace_logger or TraceLogger(root / "outputs" / "agent_trace.jsonl")
+    trace_logger.set_run_metadata(run_metadata)
     agent = build_agent(normalized_agent, provider, project_root=root, top_k=top_k, trace_logger=trace_logger)
     tasks = load_task_set(task_set, project_root=root)
 
-    results = [agent.run_task(task) for task in tasks]
+    raw_results = [agent.run_task(task) for task in tasks]
+    results = [attach_result_metadata(result, run_metadata) for result in raw_results]
     final_output_path = output_path or root / "outputs" / f"{normalized_agent}_{normalized_provider}_results.jsonl"
     write_jsonl(results, final_output_path)
 
@@ -107,11 +123,20 @@ def compare_agents(
     task_set: str,
     project_root: str | Path | None = None,
     top_k: int = 3,
+    eval_mode: str | None = None,
 ) -> Path:
     root = Path(project_root) if project_root else PROJECT_ROOT
     normalized_provider = provider_name.strip().lower()
     if normalized_provider not in SUPPORTED_PROVIDERS:
         raise ValueError(f"Unsupported provider: {provider_name}")
+    resolved_eval_mode = _resolve_eval_mode(normalized_provider, eval_mode)
+    provider_status = provider_config_statuses().get(normalized_provider)
+    provider_mode = _provider_mode_from_status(normalized_provider, resolved_eval_mode, provider_status)
+    if resolved_eval_mode == "external":
+        print(
+            "External provider eval is separated from mock eval. "
+            "Use run first for provider smoke checks, and review external reports separately."
+        )
     normalized_agents = [_normalize_agent_name(agent_name) for agent_name in agent_names if agent_name.strip()]
     for agent_name in normalized_agents:
         if agent_name not in SUPPORTED_AGENTS:
@@ -134,6 +159,7 @@ def compare_agents(
             project_root=root,
             top_k=top_k,
             trace_logger=trace_logger,
+            eval_mode=resolved_eval_mode,
         )
         output_paths[agent_name] = output_path
 
@@ -149,17 +175,28 @@ def compare_agents(
             output_paths=output_paths,
             task_count=len(tasks),
             project_root=root,
+            provider_name=normalized_provider,
+            provider_mode=provider_mode,
         ),
         eval_summary_path,
     )
-    write_markdown(build_failure_analysis(evaluated_by_agent), failure_analysis_path)
+    write_markdown(build_failure_analysis(evaluated_by_agent, provider_mode=provider_mode), failure_analysis_path)
     write_markdown(
         build_tool_trace_report(
             trace_path=trace_path,
             project_root=root,
             evaluated_by_agent=evaluated_by_agent,
+            provider_mode=provider_mode,
         ),
         tool_trace_report_path,
+    )
+    provider_eval_isolation_path = reports_dir / "provider_eval_isolation.md"
+    write_markdown(
+        build_provider_eval_isolation_report(
+            provider_name=normalized_provider,
+            provider_mode=provider_mode,
+        ),
+        provider_eval_isolation_path,
     )
 
     return_path = eval_summary_path
@@ -170,9 +207,32 @@ def compare_agents(
         if set(normalized_agents) == {"baseline", "rag"}:
             return_path = rag_report_path
 
+    manifest_path = reports_dir / "benchmark_manifest.json"
+    manifest_reports = [
+        eval_summary_path,
+        failure_analysis_path,
+        tool_trace_report_path,
+        provider_eval_isolation_path,
+        manifest_path,
+    ]
+    if "baseline" in results_by_agent and "rag" in results_by_agent:
+        manifest_reports.append(reports_dir / "rag_comparison.md")
+    manifest = build_benchmark_manifest(
+        task_set=task_set,
+        agents=normalized_agents,
+        provider=normalized_provider,
+        provider_mode=provider_mode,
+        outputs=list(output_paths.values()),
+        reports=manifest_reports,
+        project_root=root,
+    )
+    write_benchmark_manifest(manifest, manifest_path)
+
     print(f"Saved eval summary to {eval_summary_path}")
     print(f"Saved failure analysis to {failure_analysis_path}")
     print(f"Saved tool trace report to {tool_trace_report_path}")
+    print(f"Saved provider eval isolation report to {provider_eval_isolation_path}")
+    print(f"Saved benchmark manifest to {manifest_path}")
     return return_path
 
 
@@ -240,12 +300,14 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--provider", default="mock", choices=sorted(SUPPORTED_PROVIDERS))
     run_parser.add_argument("--task-set", default="product_tasks")
     run_parser.add_argument("--top-k", type=int, default=3)
+    run_parser.add_argument("--eval-mode", choices=["mock", "external"], default=None)
 
     compare_parser = subparsers.add_parser("compare", help="Compare multiple agents.")
     compare_parser.add_argument("--agents", default="baseline,rag")
     compare_parser.add_argument("--provider", default="mock", choices=sorted(SUPPORTED_PROVIDERS))
     compare_parser.add_argument("--task-set", default="product_tasks")
     compare_parser.add_argument("--top-k", type=int, default=3)
+    compare_parser.add_argument("--eval-mode", choices=["mock", "external"], default=None)
 
     subparsers.add_parser("providers", help="Show provider configuration status without network calls.")
 
@@ -262,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
             provider_name=args.provider,
             task_set=args.task_set,
             top_k=args.top_k,
+            eval_mode=args.eval_mode,
         )
         return 0
 
@@ -271,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
             provider_name=args.provider,
             task_set=args.task_set,
             top_k=args.top_k,
+            eval_mode=args.eval_mode,
         )
         return 0
 
@@ -298,6 +362,20 @@ def provider_config_statuses() -> dict[str, str]:
         config = redact_config()
         statuses[provider_name] = "configured" if config.get("api_key") == "configured" else "missing_api_key"
     return statuses
+
+
+def _resolve_eval_mode(provider_name: str, eval_mode: str | None) -> str:
+    if provider_name == "mock":
+        return "mock"
+    return eval_mode or "external"
+
+
+def _provider_mode_from_status(provider_name: str, eval_mode: str, provider_status: str | None) -> str:
+    if provider_name == "mock" or eval_mode == "mock":
+        return "mock"
+    if provider_status == "configured":
+        return "external_configured"
+    return "external_missing_key"
 
 
 def _display_path(path: Path, project_root: Path | None) -> str:

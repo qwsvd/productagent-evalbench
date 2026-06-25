@@ -143,6 +143,9 @@ def test_cli_recognizes_external_providers_without_keys(monkeypatch, tmp_path: P
         assert output_path.exists()
         assert len(results) >= 20
         assert results[0]["provider"] == provider_name
+        assert results[0]["provider_mode"] == "external_missing_key"
+        assert results[0]["status"] == "error"
+        assert results[0]["run_id"]
         assert results[0]["provider_response"]["status"] == "error"
         assert results[0]["provider_response"]["error_code"] == "provider_not_configured"
 

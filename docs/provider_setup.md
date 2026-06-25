@@ -130,6 +130,42 @@ This command prints only:
 
 It does not print API keys and does not make network calls.
 
+## Provider Eval Isolation
+
+Phase 5 separates mock evaluation from external-provider evaluation.
+
+- `provider_mode=mock`: offline reproducible benchmark using `MockProvider`.
+- `provider_mode=external_missing_key`: external provider selected but not configured; result records should show structured setup errors.
+- `provider_mode=external_configured`: external provider credentials are present; results should be reviewed separately from mock metrics.
+
+Do not mix mock scores with DeepSeek, Qwen, OpenAI, or Gemini scores in one benchmark conclusion. Real-provider results depend on API keys, network conditions, rate limits, pricing, model versions, and provider response formats.
+
+## Run Metadata
+
+Each CLI run writes result records with:
+
+- `run_id`
+- `timestamp`
+- `agent`
+- `provider`
+- `provider_mode`
+- `eval_mode`
+- `task_set`
+- `project_phase`
+- `schema_version`
+
+These fields are generated locally and never include API keys.
+
+## Benchmark Manifest
+
+Mock compare runs generate:
+
+```text
+reports/benchmark_manifest.json
+```
+
+The manifest records the task set, agents, provider, provider mode, output files, report files, schema version, and notes that mock results do not represent real DeepSeek/Qwen/OpenAI/Gemini performance.
+
 ## Common Errors
 
 - `provider_not_configured`: missing API key, base URL, or model name.
