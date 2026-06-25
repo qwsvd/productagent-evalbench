@@ -110,6 +110,7 @@ class OpenAICompatibleProvider(BaseProvider):
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
+            **({"max_tokens": self.max_output_tokens} if getattr(self, "max_output_tokens", None) else {}),
         }
 
     def build_request(self, payload: dict[str, Any]) -> urllib.request.Request:

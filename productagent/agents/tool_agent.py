@@ -3,8 +3,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from productagent.data_loader import PROJECT_ROOT
+from productagent.memory import SessionMemoryStore
 from productagent.models.base import BaseProvider
 from productagent.models.provider_response import normalize_provider_response
+from productagent.skills import SkillRegistry
 from productagent.tool_coverage import split_required_tools
 from productagent.tools import (
     check_order_state,
@@ -31,11 +33,17 @@ class ToolAgent:
         docs_dir: str | Path | None = None,
         top_k: int = 3,
         trace_logger: TraceLogger | None = None,
+        memory_mode: str = "off",
+        memory_store: SessionMemoryStore | None = None,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         self.provider = provider
         self.docs_dir = Path(docs_dir) if docs_dir else PROJECT_ROOT / "data" / "product_docs"
         self.top_k = top_k
         self.trace_logger = trace_logger or TraceLogger()
+        self.memory_mode = memory_mode
+        self.memory_store = memory_store or SessionMemoryStore()
+        self.skill_registry = skill_registry or SkillRegistry()
 
     def run(
         self,
@@ -48,6 +56,7 @@ class ToolAgent:
         user_id: str | None = None,
         order_id: str | None = None,
         tool_availability: dict[str, str] | None = None,
+        memory_mode: str | None = None,
     ) -> dict[str, Any]:
         expected_answer_points = expected_answer_points or []
         required_tools = required_tools or []
@@ -80,6 +89,18 @@ class ToolAgent:
         resolved_user_id = user_id or _extract_user_id(user_query) or "unknown"
         resolved_order_id = order_id or _extract_order_id(user_query)
         feature_name = _infer_feature_name(user_query)
+        active_memory_mode = memory_mode or self.memory_mode
+        memory_context = ""
+        memory_used = False
+        memory_selection_reason = "memory disabled for reproducible default runs"
+        if active_memory_mode == "session":
+            memory_context = self.memory_store.summarize_user_context(resolved_user_id)
+            memory_used = bool(memory_context)
+            memory_selection_reason = (
+                "session memory enabled and prior context was found"
+                if memory_used
+                else "session memory enabled but no prior context was found"
+            )
 
         try:
             if _should_search_docs(issue_type, user_query, task_type):
@@ -199,7 +220,14 @@ class ToolAgent:
                 )
                 self._call_risk_state(trace_id, task_id, tool_calls, selected_tools, resolved_user_id, resolved_order_id, issue_type)
 
-            route_reason = _build_route_reason(issue_type, selected_tools)
+            selected_skills = _selected_skills(selected_tools, self.skill_registry)
+            route_reason = _build_route_reason(
+                issue_type,
+                selected_tools,
+                selected_skills,
+                memory_used,
+                memory_selection_reason,
+            )
             self._log(
                 trace_id=trace_id,
                 task_id=task_id,
@@ -207,10 +235,21 @@ class ToolAgent:
                 payload={
                     "issue_type": issue_type,
                     "selected_tools": selected_tools,
+                    "selected_skills": selected_skills,
+                    "memory_used": memory_used,
                     "summary": _route_summary(issue_type),
                 },
             )
 
+            if memory_context:
+                retrieved_context.append(
+                    {
+                        "source_file": "session_memory",
+                        "chunk_id": f"{resolved_user_id}#recent",
+                        "content": memory_context,
+                        "score": 1,
+                    }
+                )
             provider_output = self.provider.generate(
                 user_query=user_query,
                 task_type=task_type,
@@ -262,6 +301,9 @@ class ToolAgent:
                 "final_answer": final_answer,
                 "provider_response": provider_response,
                 "risk_check": risk_result,
+                "memory_mode": active_memory_mode,
+                "memory_used": memory_used,
+                "memory_context": memory_context,
                 "required_tools": required_tools,
                 "available_required_tools": coverage["available"],
                 "unavailable_required_tools": coverage["future_mock_unavailable"],
@@ -276,6 +318,13 @@ class ToolAgent:
                 event_type="task_end",
                 payload={"status": "ok", "tool_call_count": len(tool_calls)},
             )
+            if active_memory_mode == "session":
+                self.memory_store.add_event(
+                    user_id=resolved_user_id,
+                    task_id=task_id,
+                    event_type="task_end",
+                    content=f"issue_type={issue_type};risk={risk_result.get('risk_level', 'unknown')}",
+                )
             return result
 
         except Exception as exc:
@@ -456,10 +505,20 @@ class ToolAgent:
         )
 
 
-def _build_route_reason(issue_type: str, selected_tools: list[dict[str, str]]) -> dict[str, Any]:
+def _build_route_reason(
+    issue_type: str,
+    selected_tools: list[dict[str, str]],
+    selected_skills: list[dict[str, str]],
+    memory_used: bool,
+    memory_selection_reason: str,
+) -> dict[str, Any]:
     return {
         "issue_type": issue_type,
         "selected_tools": selected_tools,
+        "selected_skills": selected_skills,
+        "skill_selection_reason": "skills are mapped from selected local tools through SkillRegistry",
+        "memory_used": memory_used,
+        "memory_selection_reason": memory_selection_reason,
         "not_selected_tools": [
             {
                 "tool_name": "create_ticket",
@@ -469,6 +528,18 @@ def _build_route_reason(issue_type: str, selected_tools: list[dict[str, str]]) -
         if not any(item["tool_name"] == "create_ticket" for item in selected_tools)
         else [],
     }
+
+
+def _selected_skills(selected_tools: list[dict[str, str]], skill_registry: SkillRegistry) -> list[dict[str, str]]:
+    skills: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for selected_tool in selected_tools:
+        tool_name = selected_tool.get("tool_name", "")
+        skill = skill_registry.get_skill(tool_name)
+        if skill and skill["name"] not in seen:
+            skills.append({"name": skill["name"], "risk_level": skill["risk_level"], "when_to_use": skill["when_to_use"]})
+            seen.add(skill["name"])
+    return skills
 
 
 def _route_summary(issue_type: str) -> str:

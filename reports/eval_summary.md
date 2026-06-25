@@ -34,6 +34,8 @@
 - This report does not fabricate real-model effects. Mock metrics and real-provider metrics should be reviewed separately.
 - Phase 5 adds run metadata, result schema checks, benchmark manifests, and explicit provider evaluation isolation.
 - The main reproducible benchmark is the mock-provider run. External provider runs must be reported separately.
+- Phase 6 adds Claude provider support, session memory, SkillRegistry, MCP-style local tool discovery, model benchmark dry-runs, and cost/latency/error tracking.
+- Real provider benchmark results are opt-in and guarded by `--real-run`, API keys, `--budget-usd`, `--max-tasks`, and `--max-output-tokens`.
 
 ## Available Tool Hits
 
@@ -56,6 +58,7 @@
 - Phase 3.7 adds mock risk-state checks and `route_reason` for tool-selection explainability.
 - Phase 4 adds a real-provider engineering layer while keeping mock runs reproducible by default.
 - Phase 5 separates mock evaluation from external-provider evaluation and writes `reports/benchmark_manifest.json`.
+- Phase 6 adds memory/skills/MCP experiments and model benchmark reports without mixing them into the mock eval score.
 
 ## Current Limitations
 
@@ -66,4 +69,6 @@
 - Eval metrics are heuristic and are not a substitute for production evaluation.
 - Real providers require user-supplied API keys and current official provider configuration.
 - Real-model results should be generated separately and not mixed with mock-provider conclusions.
+- Session memory is optional and disabled by default so the standard mock compare remains deterministic.
+- MCP-style tools are local discovery/invocation wrappers, not a production MCP server.
 - No real database is connected.

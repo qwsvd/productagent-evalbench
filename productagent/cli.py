@@ -1,10 +1,15 @@
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
 from productagent.agents import BaselineAgent, RagAgent, ToolAgent
+from productagent.benchmarks import run_model_benchmark
+from productagent.benchmarks.benchmark_config import BenchmarkConfig
 from productagent.benchmark_manifest import build_benchmark_manifest, write_benchmark_manifest
 from productagent.data_loader import PROJECT_ROOT, load_task_set
+from productagent.eval.experiment_runner import run_experiments
+from productagent.eval.regression_check import run_regression_check
 from productagent.eval import evaluate_results_by_agent
 from productagent.eval.report_writer import (
     build_eval_summary,
@@ -14,20 +19,23 @@ from productagent.eval.report_writer import (
 )
 from productagent.models import (
     BaseProvider,
+    ClaudeProvider,
     DeepSeekProvider,
     GeminiProvider,
     MockProvider,
     OpenAIProvider,
     QwenProvider,
 )
+from productagent.mcp import build_tool_catalog
 from productagent.output_writer import write_jsonl, write_markdown
 from productagent.result_schema import attach_result_metadata
 from productagent.run_metadata import create_run_metadata
+from productagent.skills import SkillRegistry
 from productagent.tracing import TraceLogger
 
 
 SUPPORTED_AGENTS = {"baseline", "rag", "tool"}
-SUPPORTED_PROVIDERS = {"mock", "deepseek", "qwen", "openai", "gemini"}
+SUPPORTED_PROVIDERS = {"mock", "deepseek", "qwen", "openai", "gemini", "claude"}
 
 
 def build_provider(provider_name: str) -> BaseProvider:
@@ -42,6 +50,8 @@ def build_provider(provider_name: str) -> BaseProvider:
         return OpenAIProvider()
     if normalized_provider == "gemini":
         return GeminiProvider()
+    if normalized_provider == "claude":
+        return ClaudeProvider()
     raise ValueError(f"Unsupported provider: {provider_name}")
 
 
@@ -51,6 +61,7 @@ def build_agent(
     project_root: Path,
     top_k: int = 3,
     trace_logger: TraceLogger | None = None,
+    memory_mode: str = "off",
 ) -> BaselineAgent | RagAgent | ToolAgent:
     docs_dir = project_root / "data" / "product_docs"
     if agent_name == "baseline":
@@ -58,7 +69,13 @@ def build_agent(
     if agent_name == "rag":
         return RagAgent(provider=provider, docs_dir=docs_dir, top_k=top_k, trace_logger=trace_logger)
     if agent_name == "tool":
-        return ToolAgent(provider=provider, docs_dir=docs_dir, top_k=top_k, trace_logger=trace_logger)
+        return ToolAgent(
+            provider=provider,
+            docs_dir=docs_dir,
+            top_k=top_k,
+            trace_logger=trace_logger,
+            memory_mode=memory_mode,
+        )
     raise ValueError(f"Unsupported agent: {agent_name}")
 
 
@@ -71,6 +88,7 @@ def run_task_set(
     top_k: int = 3,
     trace_logger: TraceLogger | None = None,
     eval_mode: str | None = None,
+    memory_mode: str = "off",
 ) -> list[dict[str, Any]]:
     root = Path(project_root) if project_root else PROJECT_ROOT
     normalized_agent = _normalize_agent_name(agent_name)
@@ -92,7 +110,14 @@ def run_task_set(
     )
     trace_logger = trace_logger or TraceLogger(root / "outputs" / "agent_trace.jsonl")
     trace_logger.set_run_metadata(run_metadata)
-    agent = build_agent(normalized_agent, provider, project_root=root, top_k=top_k, trace_logger=trace_logger)
+    agent = build_agent(
+        normalized_agent,
+        provider,
+        project_root=root,
+        top_k=top_k,
+        trace_logger=trace_logger,
+        memory_mode=memory_mode,
+    )
     tasks = load_task_set(task_set, project_root=root)
 
     raw_results = [agent.run_task(task) for task in tasks]
@@ -124,6 +149,7 @@ def compare_agents(
     project_root: str | Path | None = None,
     top_k: int = 3,
     eval_mode: str | None = None,
+    memory_mode: str = "off",
 ) -> Path:
     root = Path(project_root) if project_root else PROJECT_ROOT
     normalized_provider = provider_name.strip().lower()
@@ -160,6 +186,7 @@ def compare_agents(
             top_k=top_k,
             trace_logger=trace_logger,
             eval_mode=resolved_eval_mode,
+            memory_mode=memory_mode,
         )
         output_paths[agent_name] = output_path
 
@@ -301,6 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--task-set", default="product_tasks")
     run_parser.add_argument("--top-k", type=int, default=3)
     run_parser.add_argument("--eval-mode", choices=["mock", "external"], default=None)
+    run_parser.add_argument("--memory-mode", choices=["off", "session"], default="off")
 
     compare_parser = subparsers.add_parser("compare", help="Compare multiple agents.")
     compare_parser.add_argument("--agents", default="baseline,rag")
@@ -308,8 +336,26 @@ def build_parser() -> argparse.ArgumentParser:
     compare_parser.add_argument("--task-set", default="product_tasks")
     compare_parser.add_argument("--top-k", type=int, default=3)
     compare_parser.add_argument("--eval-mode", choices=["mock", "external"], default=None)
+    compare_parser.add_argument("--memory-mode", choices=["off", "session"], default="off")
 
     subparsers.add_parser("providers", help="Show provider configuration status without network calls.")
+    subparsers.add_parser("skills", help="List local Agent skills.")
+    subparsers.add_parser("mcp-tools", help="List MCP-style local tool catalog.")
+    subparsers.add_parser("experiments", help="Run local context engineering experiments.")
+
+    benchmark_parser = subparsers.add_parser("model-benchmark", help="Run dry-run or explicit real provider benchmark.")
+    benchmark_parser.add_argument("--providers", default="mock")
+    benchmark_parser.add_argument("--agents", default="tool")
+    benchmark_parser.add_argument("--task-set", default="product_tasks")
+    benchmark_parser.add_argument("--max-tasks", type=int, default=5)
+    mode_group = benchmark_parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--dry-run", action="store_true", default=True)
+    mode_group.add_argument("--real-run", action="store_true", default=False)
+    benchmark_parser.add_argument("--budget-usd", type=float, default=None)
+    benchmark_parser.add_argument("--max-output-tokens", type=int, default=None)
+    benchmark_parser.add_argument("--timeout-seconds", type=int, default=60)
+
+    subparsers.add_parser("regression-check", help="Run local regression checks and write a report.")
 
     return parser
 
@@ -325,6 +371,7 @@ def main(argv: list[str] | None = None) -> int:
             task_set=args.task_set,
             top_k=args.top_k,
             eval_mode=args.eval_mode,
+            memory_mode=args.memory_mode,
         )
         return 0
 
@@ -335,12 +382,46 @@ def main(argv: list[str] | None = None) -> int:
             task_set=args.task_set,
             top_k=args.top_k,
             eval_mode=args.eval_mode,
+            memory_mode=args.memory_mode,
         )
         return 0
 
     if args.command == "providers":
         for provider_name, status in provider_config_statuses().items():
             print(f"{provider_name}: {status}")
+        return 0
+
+    if args.command == "skills":
+        for skill in SkillRegistry().list_skills():
+            print(f"{skill['name']}: {skill['description']}")
+        return 0
+
+    if args.command == "mcp-tools":
+        print(json.dumps({"tools": build_tool_catalog()}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "experiments":
+        run_experiments(project_root=PROJECT_ROOT)
+        return 0
+
+    if args.command == "model-benchmark":
+        dry_run = not args.real_run
+        config = BenchmarkConfig(
+            providers=[item.strip() for item in args.providers.split(",") if item.strip()],
+            agents=[item.strip() for item in args.agents.split(",") if item.strip()],
+            task_set=args.task_set,
+            max_tasks=args.max_tasks,
+            dry_run=dry_run,
+            real_run=args.real_run,
+            budget_usd=args.budget_usd,
+            max_output_tokens=args.max_output_tokens,
+            timeout_seconds=args.timeout_seconds,
+        )
+        run_model_benchmark(config, project_root=PROJECT_ROOT)
+        return 0
+
+    if args.command == "regression-check":
+        run_regression_check(project_root=PROJECT_ROOT)
         return 0
 
     parser.error(f"Unsupported command: {args.command}")
@@ -353,7 +434,7 @@ def _normalize_agent_name(agent_name: str) -> str:
 
 def provider_config_statuses() -> dict[str, str]:
     statuses = {"mock": "available"}
-    for provider_name in ["deepseek", "qwen", "openai", "gemini"]:
+    for provider_name in ["deepseek", "qwen", "openai", "gemini", "claude"]:
         provider = build_provider(provider_name)
         redact_config = getattr(provider, "redact_config", None)
         if redact_config is None:

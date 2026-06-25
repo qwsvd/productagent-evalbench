@@ -18,7 +18,7 @@ def build_benchmark_manifest(
 ) -> dict[str, Any]:
     manifest = {
         "project": "ProductAgent-EvalBench",
-        "phase": "Phase 5",
+        "phase": "Phase 6",
         "task_set": task_set,
         "agents": agents,
         "provider": provider,
@@ -27,8 +27,9 @@ def build_benchmark_manifest(
         "reports": [_display_path(path, project_root) for path in reports],
         "schema_version": schema_version,
         "notes": [
-            "Mock results do not represent real DeepSeek/Qwen/OpenAI/Gemini performance.",
+            "Mock results do not represent real DeepSeek/Qwen/OpenAI/Gemini/Claude performance.",
             "External provider evaluation should be run and reported separately.",
+            "Phase 6 adds opt-in real-provider benchmark harnesses with dry-run defaults and budget guards.",
         ],
     }
     manifest["schema_validation"] = validate_report_manifest(manifest)

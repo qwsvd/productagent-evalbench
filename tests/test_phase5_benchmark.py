@@ -19,7 +19,7 @@ def test_create_run_metadata_has_required_fields() -> None:
     assert metadata["run_id"]
     assert metadata["provider_mode"] == "mock"
     assert metadata["schema_version"] == "1.0"
-    assert metadata["project_phase"] == "Phase 5"
+    assert metadata["project_phase"] == "Phase 6"
 
 
 def test_mock_provider_result_record_has_run_metadata(tmp_path: Path) -> None:
@@ -137,10 +137,11 @@ def test_readme_has_phase5_positioning() -> None:
 
 
 def test_providers_command_statuses_are_local(monkeypatch) -> None:
-    for env_name in ["DEEPSEEK_API_KEY", "QWEN_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]:
+    for env_name in ["DEEPSEEK_API_KEY", "QWEN_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"]:
         monkeypatch.delenv(env_name, raising=False)
 
     statuses = provider_config_statuses()
 
     assert statuses["mock"] == "available"
     assert statuses["deepseek"] == "missing_api_key"
+    assert statuses["claude"] == "missing_api_key"

@@ -9,6 +9,7 @@ from productagent.models import (
     OpenAICompatibleProvider,
     OpenAIProvider,
     QwenProvider,
+    ClaudeProvider,
 )
 
 
@@ -25,6 +26,10 @@ ALL_PROVIDER_ENV_VARS = [
     "GEMINI_API_KEY",
     "GEMINI_BASE_URL",
     "GEMINI_MODEL",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_BASE_URL",
+    "CLAUDE_MODEL",
+    "CLAUDE_TIMEOUT_SECONDS",
 ]
 
 
@@ -103,6 +108,17 @@ def test_gemini_provider_metadata(monkeypatch) -> None:
     assert provider.model_name == "gemini-1.5-flash"
 
 
+def test_claude_provider_metadata(monkeypatch) -> None:
+    _clear_provider_env(monkeypatch)
+    provider = ClaudeProvider()
+
+    assert provider.name == "claude"
+    assert provider.api_key_env == "ANTHROPIC_API_KEY"
+    assert provider.base_url_env == "CLAUDE_BASE_URL"
+    assert provider.model_env == "CLAUDE_MODEL"
+    assert provider.model_name == "claude-haiku"
+
+
 def test_redact_config_does_not_expose_api_key(monkeypatch) -> None:
     _clear_provider_env(monkeypatch)
     sentinel_value = "redaction-" + "sentinel-value"
@@ -124,13 +140,14 @@ def test_provider_statuses_do_not_call_network(monkeypatch) -> None:
         "qwen": "missing_api_key",
         "openai": "missing_api_key",
         "gemini": "missing_api_key",
+        "claude": "missing_api_key",
     }
 
 
 def test_cli_recognizes_external_providers_without_keys(monkeypatch, tmp_path: Path) -> None:
     _clear_provider_env(monkeypatch)
 
-    for provider_name in ["deepseek", "qwen", "openai", "gemini"]:
+    for provider_name in ["deepseek", "qwen", "openai", "gemini", "claude"]:
         output_path = tmp_path / f"baseline_{provider_name}_results.jsonl"
         results = run_task_set(
             agent_name="baseline",

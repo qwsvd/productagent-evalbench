@@ -56,6 +56,7 @@
 - Phase 4 provider support does not change mock-based failure conclusions or claim real-model quality.
 - `provider_not_configured`, `provider_request_failed`, `provider_response_invalid`, and `provider_timeout` are provider-layer errors, not automatically Agent logic errors.
 - Provider-layer errors should be triaged separately from routing, retrieval, and tool-selection issues.
+- Phase 6 model benchmark errors such as `dry_run_external_skipped` and `budget_exceeded` are safety controls, not answer-quality failures.
 
 ## Tasks With Future Tools
 

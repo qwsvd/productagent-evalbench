@@ -4,7 +4,7 @@ from typing import Any
 
 
 SCHEMA_VERSION = "1.0"
-PROJECT_PHASE = "Phase 5"
+PROJECT_PHASE = "Phase 6"
 
 
 def create_run_metadata(

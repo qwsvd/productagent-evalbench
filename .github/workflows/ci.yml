@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Pytest
+        run: python -m pytest -q
+      - name: Provider status
+        run: python -m productagent.cli providers
+      - name: Skills
+        run: python -m productagent.cli skills
+      - name: MCP-style tools
+        run: python -m productagent.cli mcp-tools
+      - name: Mock compare
+        run: python -m productagent.cli compare --agents baseline,rag,tool --provider mock --task-set product_tasks
+      - name: Experiments
+        run: python -m productagent.cli experiments
+      - name: Model benchmark dry run
+        run: python -m productagent.cli model-benchmark --providers mock --agents tool --task-set product_tasks --max-tasks 3 --dry-run
+      - name: Regression check
+        run: python -m productagent.cli regression-check

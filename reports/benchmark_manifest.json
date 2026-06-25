@@ -1,6 +1,6 @@
 {
   "project": "ProductAgent-EvalBench",
-  "phase": "Phase 5",
+  "phase": "Phase 6",
   "task_set": "product_tasks",
   "agents": [
     "baseline",
@@ -24,8 +24,9 @@
   ],
   "schema_version": "1.0",
   "notes": [
-    "Mock results do not represent real DeepSeek/Qwen/OpenAI/Gemini performance.",
-    "External provider evaluation should be run and reported separately."
+    "Mock results do not represent real DeepSeek/Qwen/OpenAI/Gemini/Claude performance.",
+    "External provider evaluation should be run and reported separately.",
+    "Phase 6 adds opt-in real-provider benchmark harnesses with dry-run defaults and budget guards."
   ],
   "schema_validation": {
     "valid": true,

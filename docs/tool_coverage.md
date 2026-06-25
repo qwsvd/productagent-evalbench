@@ -71,6 +71,12 @@ ToolAgent returns `route_reason` with the routed `issue_type`, selected tools, a
 
 `route_reason` helps evaluate whether ToolAgent chose the right tools before judging answer wording. For example, a refund route should show policy, order-state, risk-state, and final risk-check reasoning instead of only showing the final answer.
 
+## SkillRegistry And MCP-Style Catalog
+
+Phase 6 maps each local tool into `SkillRegistry` metadata with description, input schema, output notes, risk level, and issue types. The MCP-style catalog exposes the same safe local tools through `tools/list` and `tools/call` JSON-RPC style handlers.
+
+This is local discovery and invocation only. It is not a production MCP server and does not call external systems.
+
 ## Current Coverage Status
 
 Current available tools are `search_docs`, `read_policy`, `check_user_state`, `check_order_state`, `check_usage_state`, `check_risk_state`, `classify_issue`, `create_ticket`, and `risk_check`.

@@ -1,22 +1,38 @@
 # ProductAgent-EvalBench
 
-A local, reproducible Agent evaluation bench for product-support tasks.
+![CI](https://img.shields.io/badge/CI-pytest%20%2B%20smoke%20test-blue)
+
+A local and optional-real-provider Agent evaluation bench for product-support tasks, focused on RAG, Memory, Skills, MCP-style tool use, tracing, model benchmarking, cost control, and evaluation optimization.
 
 It compares:
 
 - `BaselineAgent`
 - `RagAgent`
 - `ToolAgent`
+- `ToolAgent` with session memory
+- optional real-model providers
 
 It demonstrates:
 
-- retrieval context
+- Agent implementation
+- Agent optimization
+- model performance evaluation
+- context engineering
+- RAG
+- session-level Memory
+- SkillRegistry
+- MCP-style tool discovery and invocation
 - local mock tools
+- minimal evaluator agent
 - route reasoning
-- tracing
+- JSONL tracing
 - heuristic eval
-- fair tool coverage scoring
-- Provider abstraction for DeepSeek / Qwen / OpenAI / Gemini
+- experiment matrix
+- ablation analysis
+- context engineering experiment
+- regression check
+- latency/cost/error tracking
+- Provider abstraction for DeepSeek / Qwen / OpenAI / Gemini / Claude
 - strict separation between mock eval and external-provider eval
 
 Mock runs need no real model APIs, real databases, external services, LangChain, LlamaIndex, or vector databases.
@@ -26,8 +42,40 @@ Mock runs need no real model APIs, real databases, external services, LangChain,
 ```bash
 python -m pytest -q
 python -m productagent.cli providers
+python -m productagent.cli skills
+python -m productagent.cli mcp-tools
 python -m productagent.cli compare --agents baseline,rag,tool --provider mock --task-set product_tasks
+python -m productagent.cli experiments
+python -m productagent.cli model-benchmark --providers mock --agents tool --task-set product_tasks --max-tasks 3 --dry-run
+python -m productagent.cli regression-check
+python scripts/smoke_test.py
 ```
+
+## Real Provider Eval Is Opt-In
+
+Default commands do not call DeepSeek, Qwen, OpenAI, Gemini, or Claude and do not spend money. External model calls require `--real-run`, configured API keys, `--budget-usd`, `--max-tasks`, and `--max-output-tokens`.
+
+Example dry run:
+
+```bash
+python -m productagent.cli model-benchmark --providers mock --agents tool --task-set product_tasks --max-tasks 5 --dry-run
+```
+
+Example explicit real run after configuring keys:
+
+```bash
+python -m productagent.cli model-benchmark --providers deepseek --agents tool --task-set product_tasks --max-tasks 5 --real-run --budget-usd 1 --max-output-tokens 400 --timeout-seconds 60
+```
+
+## Links
+
+- `docs/real_model_eval_guide.md`
+- `docs/cost_control_guide.md`
+- `docs/evaluation_methodology.md`
+- `docs/jd_alignment.md`
+- `reports/model_benchmark_report.md`
+- `reports/model_performance_comparison.md`
+- `reports/model_cost_report.md`
 
 ## Current Status
 
@@ -216,6 +264,14 @@ python -m productagent.cli run --agent tool --provider gemini --task-set product
 
 Set `GEMINI_API_KEY`, `GEMINI_BASE_URL`, `GEMINI_MODEL`, and `GEMINI_TIMEOUT_SECONDS`. Gemini OpenAI-compatible configuration, base URL, and model names should follow the latest official documentation or console. Phase 4 does not implement complex Gemini-specific adaptation.
 
+### Try Claude
+
+```bash
+python -m productagent.cli run --agent tool --provider claude --task-set product_tasks
+```
+
+Set `ANTHROPIC_API_KEY`, `CLAUDE_BASE_URL`, `CLAUDE_MODEL`, and `CLAUDE_TIMEOUT_SECONDS`. Claude model names and compatible endpoints should follow the latest Anthropic console or official documentation.
+
 ### API Key Safety
 
 - Do not commit real API keys.
@@ -235,6 +291,21 @@ Phase 5 adds:
 - a reproducibility runbook at `docs/runbook.md`.
 
 The default benchmark remains the offline mock run. External-provider runs are supported by configuration but must be evaluated and reported separately.
+
+## Phase 6: JD-Max Real Evaluation System
+
+Phase 6 adds:
+
+- `ClaudeProvider` and provider status checks for Claude.
+- optional `SessionMemoryStore` with `--memory-mode session`.
+- `SkillRegistry` and `python -m productagent.cli skills`.
+- MCP-style local tool discovery/invocation and `python -m productagent.cli mcp-tools`.
+- opt-in model benchmark harness with dry-run default, `--real-run`, `--budget-usd`, `--max-tasks`, `--max-output-tokens`, and timeout controls.
+- latency, cost, token, and error-rate tracking in model benchmark reports.
+- context engineering experiments, ablation report, optimization report, and evaluator agent report.
+- local regression check and smoke test.
+
+The Phase 6 real-provider path is deliberately guarded. It only calls external providers when the user explicitly chooses `--real-run`, configures keys, and sets budget/task/token limits.
 
 ## Install
 
@@ -313,5 +384,5 @@ python -m pytest -q
 - Network, cost, rate limits, provider availability, and model output format changes can affect real-provider results.
 - Current eval remains heuristic and should not mix mock metrics with real-model conclusions without separate reporting.
 - Production-grade retry, concurrency, caching, rate limiting, and cost control are not implemented.
-- The project does not fabricate DeepSeek, Qwen, OpenAI, or Gemini quality results.
+- The project does not fabricate DeepSeek, Qwen, OpenAI, Gemini, or Claude quality results.
 - Long-term Memory, real MCP Server integration, real multi-agent collaboration, and online deployment are not implemented.

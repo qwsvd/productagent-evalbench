@@ -9,16 +9,16 @@ Mock eval is the offline reproducible benchmark. It uses `MockProvider`, local p
 
 ## External Provider Eval
 
-External provider eval can use DeepSeek, Qwen, OpenAI, or Gemini through the OpenAI-compatible provider layer, but those runs depend on user-provided API keys, current provider base URLs, model versions, network conditions, rate limits, and cost.
+External provider eval can use DeepSeek, Qwen, OpenAI, Gemini, or Claude through the provider layer, but those runs depend on user-provided API keys, current provider base URLs, model versions, network conditions, rate limits, and cost.
 
 ## Isolation Rule
 
-Do not mix mock scores with real-provider scores in the same benchmark conclusion. DeepSeek, Qwen, OpenAI, and Gemini performance must be run separately, stored separately, and reported with provider metadata.
+Do not mix mock scores with real-provider scores in the same benchmark conclusion. DeepSeek, Qwen, OpenAI, Gemini, and Claude performance must be run separately, stored separately, and reported with provider metadata.
 
 ## No Fabricated Benchmark
 
-This project does not fabricate DeepSeek, Qwen, OpenAI, or Gemini quality metrics. If a provider is not configured, results should show structured provider errors such as `provider_not_configured` rather than pretend model answers.
+This project does not fabricate DeepSeek, Qwen, OpenAI, Gemini, or Claude quality metrics. If a provider is not configured, results should show structured provider errors such as `provider_not_configured` rather than pretend model answers.
 
 ## Future Comparison Fields
 
-Future real-provider reports can add latency, cost, token usage, error-rate comparison, retry counts, and provider-specific response validation.
+Phase 6 adds first-pass latency, cost, token usage, and error-rate fields. Future work can add retries, backoff, caching, and provider-specific response validation.

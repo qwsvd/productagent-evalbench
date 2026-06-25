@@ -66,6 +66,8 @@ def build_eval_summary(
             "- This report does not fabricate real-model effects. Mock metrics and real-provider metrics should be reviewed separately.",
             "- Phase 5 adds run metadata, result schema checks, benchmark manifests, and explicit provider evaluation isolation.",
             "- The main reproducible benchmark is the mock-provider run. External provider runs must be reported separately.",
+            "- Phase 6 adds Claude provider support, session memory, SkillRegistry, MCP-style local tool discovery, model benchmark dry-runs, and cost/latency/error tracking.",
+            "- Real provider benchmark results are opt-in and guarded by `--real-run`, API keys, `--budget-usd`, `--max-tasks`, and `--max-output-tokens`.",
             "",
             "## Available Tool Hits",
             "",
@@ -90,6 +92,7 @@ def build_eval_summary(
             "- Phase 3.7 adds mock risk-state checks and `route_reason` for tool-selection explainability.",
             "- Phase 4 adds a real-provider engineering layer while keeping mock runs reproducible by default.",
             "- Phase 5 separates mock evaluation from external-provider evaluation and writes `reports/benchmark_manifest.json`.",
+            "- Phase 6 adds memory/skills/MCP experiments and model benchmark reports without mixing them into the mock eval score.",
             "",
             "## Current Limitations",
             "",
@@ -100,6 +103,8 @@ def build_eval_summary(
             "- Eval metrics are heuristic and are not a substitute for production evaluation.",
             "- Real providers require user-supplied API keys and current official provider configuration.",
             "- Real-model results should be generated separately and not mixed with mock-provider conclusions.",
+            "- Session memory is optional and disabled by default so the standard mock compare remains deterministic.",
+            "- MCP-style tools are local discovery/invocation wrappers, not a production MCP server.",
             "- No real database is connected.",
         ]
     )
@@ -149,6 +154,7 @@ def build_failure_analysis(
             "- Phase 4 provider support does not change mock-based failure conclusions or claim real-model quality.",
             "- `provider_not_configured`, `provider_request_failed`, `provider_response_invalid`, and `provider_timeout` are provider-layer errors, not automatically Agent logic errors.",
             "- Provider-layer errors should be triaged separately from routing, retrieval, and tool-selection issues.",
+            "- Phase 6 model benchmark errors such as `dry_run_external_skipped` and `budget_exceeded` are safety controls, not answer-quality failures.",
             "",
             "## Tasks With Future Tools",
             "",
@@ -274,6 +280,7 @@ def build_tool_trace_report(
             "- Payment and invoice-specific external checks remain future tool candidates.",
             "- A reasonable substitute tool call is shown in `tool_calls`, but it is not treated as a full hit for a distinct future tool.",
             "- DeepSeek, Qwen, OpenAI, and Gemini provider outputs should be traced and evaluated in separate runs, not inferred from mock results.",
+            "- Claude provider outputs follow the same isolation rule and must not be inferred from mock results.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -293,19 +300,19 @@ def build_provider_eval_isolation_report(provider_name: str, provider_mode: str)
             "",
             "## External Provider Eval",
             "",
-            "External provider eval can use DeepSeek, Qwen, OpenAI, or Gemini through the OpenAI-compatible provider layer, but those runs depend on user-provided API keys, current provider base URLs, model versions, network conditions, rate limits, and cost.",
+            "External provider eval can use DeepSeek, Qwen, OpenAI, Gemini, or Claude through the provider layer, but those runs depend on user-provided API keys, current provider base URLs, model versions, network conditions, rate limits, and cost.",
             "",
             "## Isolation Rule",
             "",
-            "Do not mix mock scores with real-provider scores in the same benchmark conclusion. DeepSeek, Qwen, OpenAI, and Gemini performance must be run separately, stored separately, and reported with provider metadata.",
+            "Do not mix mock scores with real-provider scores in the same benchmark conclusion. DeepSeek, Qwen, OpenAI, Gemini, and Claude performance must be run separately, stored separately, and reported with provider metadata.",
             "",
             "## No Fabricated Benchmark",
             "",
-            "This project does not fabricate DeepSeek, Qwen, OpenAI, or Gemini quality metrics. If a provider is not configured, results should show structured provider errors such as `provider_not_configured` rather than pretend model answers.",
+            "This project does not fabricate DeepSeek, Qwen, OpenAI, Gemini, or Claude quality metrics. If a provider is not configured, results should show structured provider errors such as `provider_not_configured` rather than pretend model answers.",
             "",
             "## Future Comparison Fields",
             "",
-            "Future real-provider reports can add latency, cost, token usage, error-rate comparison, retry counts, and provider-specific response validation.",
+            "Phase 6 adds first-pass latency, cost, token usage, and error-rate fields. Future work can add retries, backoff, caching, and provider-specific response validation.",
             "",
         ]
     )

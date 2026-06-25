@@ -51,3 +51,4 @@ Tracing makes it possible to inspect task starts, retrieval, tool calls, risk ch
 - Payment and invoice-specific external checks remain future tool candidates.
 - A reasonable substitute tool call is shown in `tool_calls`, but it is not treated as a full hit for a distinct future tool.
 - DeepSeek, Qwen, OpenAI, and Gemini provider outputs should be traced and evaluated in separate runs, not inferred from mock results.
+- Claude provider outputs follow the same isolation rule and must not be inferred from mock results.
