@@ -10,23 +10,40 @@ from productagent.eval.report_writer import (
     build_failure_analysis,
     build_tool_trace_report,
 )
-from productagent.models import MockProvider
+from productagent.models import (
+    BaseProvider,
+    DeepSeekProvider,
+    GeminiProvider,
+    MockProvider,
+    OpenAIProvider,
+    QwenProvider,
+)
 from productagent.output_writer import write_jsonl, write_markdown
 from productagent.tracing import TraceLogger
 
 
 SUPPORTED_AGENTS = {"baseline", "rag", "tool"}
+SUPPORTED_PROVIDERS = {"mock", "deepseek", "qwen", "openai", "gemini"}
 
 
-def build_provider(provider_name: str) -> MockProvider:
-    if provider_name == "mock":
+def build_provider(provider_name: str) -> BaseProvider:
+    normalized_provider = provider_name.strip().lower()
+    if normalized_provider == "mock":
         return MockProvider()
+    if normalized_provider == "deepseek":
+        return DeepSeekProvider()
+    if normalized_provider == "qwen":
+        return QwenProvider()
+    if normalized_provider == "openai":
+        return OpenAIProvider()
+    if normalized_provider == "gemini":
+        return GeminiProvider()
     raise ValueError(f"Unsupported provider: {provider_name}")
 
 
 def build_agent(
     agent_name: str,
-    provider: MockProvider,
+    provider: BaseProvider,
     project_root: Path,
     top_k: int = 3,
     trace_logger: TraceLogger | None = None,
@@ -52,19 +69,22 @@ def run_task_set(
 ) -> list[dict[str, Any]]:
     root = Path(project_root) if project_root else PROJECT_ROOT
     normalized_agent = _normalize_agent_name(agent_name)
+    normalized_provider = provider_name.strip().lower()
     if normalized_agent not in SUPPORTED_AGENTS:
         raise ValueError(f"Unsupported agent: {agent_name}")
+    if normalized_provider not in SUPPORTED_PROVIDERS:
+        raise ValueError(f"Unsupported provider: {provider_name}")
 
-    provider = build_provider(provider_name)
+    provider = build_provider(normalized_provider)
     trace_logger = trace_logger or TraceLogger(root / "outputs" / "agent_trace.jsonl")
     agent = build_agent(normalized_agent, provider, project_root=root, top_k=top_k, trace_logger=trace_logger)
     tasks = load_task_set(task_set, project_root=root)
 
     results = [agent.run_task(task) for task in tasks]
-    final_output_path = output_path or root / "outputs" / f"{normalized_agent}_{provider_name}_results.jsonl"
+    final_output_path = output_path or root / "outputs" / f"{normalized_agent}_{normalized_provider}_results.jsonl"
     write_jsonl(results, final_output_path)
 
-    print(f"Ran {len(results)} tasks with agent={normalized_agent}, provider={provider_name}")
+    print(f"Ran {len(results)} tasks with agent={normalized_agent}, provider={normalized_provider}")
     print(f"Saved results to {final_output_path}")
     for result in results:
         first_line = result["final_answer"].splitlines()[0]
@@ -89,6 +109,9 @@ def compare_agents(
     top_k: int = 3,
 ) -> Path:
     root = Path(project_root) if project_root else PROJECT_ROOT
+    normalized_provider = provider_name.strip().lower()
+    if normalized_provider not in SUPPORTED_PROVIDERS:
+        raise ValueError(f"Unsupported provider: {provider_name}")
     normalized_agents = [_normalize_agent_name(agent_name) for agent_name in agent_names if agent_name.strip()]
     for agent_name in normalized_agents:
         if agent_name not in SUPPORTED_AGENTS:
@@ -102,10 +125,10 @@ def compare_agents(
     results_by_agent: dict[str, list[dict[str, Any]]] = {}
     output_paths: dict[str, Path] = {}
     for agent_name in normalized_agents:
-        output_path = root / "outputs" / f"{agent_name}_{provider_name}_results.jsonl"
+        output_path = root / "outputs" / f"{agent_name}_{normalized_provider}_results.jsonl"
         results_by_agent[agent_name] = run_task_set(
             agent_name=agent_name,
-            provider_name=provider_name,
+            provider_name=normalized_provider,
             task_set=task_set,
             output_path=output_path,
             project_root=root,
@@ -214,15 +237,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Run a task set.")
     run_parser.add_argument("--agent", default="baseline", choices=sorted(SUPPORTED_AGENTS))
-    run_parser.add_argument("--provider", default="mock", choices=["mock"])
+    run_parser.add_argument("--provider", default="mock", choices=sorted(SUPPORTED_PROVIDERS))
     run_parser.add_argument("--task-set", default="product_tasks")
     run_parser.add_argument("--top-k", type=int, default=3)
 
     compare_parser = subparsers.add_parser("compare", help="Compare multiple agents.")
     compare_parser.add_argument("--agents", default="baseline,rag")
-    compare_parser.add_argument("--provider", default="mock", choices=["mock"])
+    compare_parser.add_argument("--provider", default="mock", choices=sorted(SUPPORTED_PROVIDERS))
     compare_parser.add_argument("--task-set", default="product_tasks")
     compare_parser.add_argument("--top-k", type=int, default=3)
+
+    subparsers.add_parser("providers", help="Show provider configuration status without network calls.")
 
     return parser
 
@@ -249,12 +274,30 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "providers":
+        for provider_name, status in provider_config_statuses().items():
+            print(f"{provider_name}: {status}")
+        return 0
+
     parser.error(f"Unsupported command: {args.command}")
     return 2
 
 
 def _normalize_agent_name(agent_name: str) -> str:
     return agent_name.strip().lower()
+
+
+def provider_config_statuses() -> dict[str, str]:
+    statuses = {"mock": "available"}
+    for provider_name in ["deepseek", "qwen", "openai", "gemini"]:
+        provider = build_provider(provider_name)
+        redact_config = getattr(provider, "redact_config", None)
+        if redact_config is None:
+            statuses[provider_name] = "unknown"
+            continue
+        config = redact_config()
+        statuses[provider_name] = "configured" if config.get("api_key") == "configured" else "missing_api_key"
+    return statuses
 
 
 def _display_path(path: Path, project_root: Path | None) -> str:

@@ -16,5 +16,5 @@ class BaseProvider(ABC):
         required_tools: Sequence[str] | None = None,
         risk_points: Sequence[str] | None = None,
         retrieved_context: Sequence[Mapping[str, Any]] | None = None,
-    ) -> str:
+    ) -> str | dict[str, Any]:
         """Return a final answer for one product task."""

@@ -28,6 +28,8 @@
 - Phase 3.7 adds `check_risk_state` as a local mock risk-state tool, so risk-state requirements now count as available tools.
 - These mock tools do not connect to a real order system, user system, database, or external API.
 - `route_reason` explains why ToolAgent selected each tool, improving routing auditability.
+- Phase 4 adds DeepSeek, Qwen, OpenAI, and Gemini provider-layer support through `OpenAICompatibleProvider`.
+- This report does not fabricate real-model effects. Mock metrics and real-provider metrics should be reviewed separately.
 
 ## Available Tool Hits
 
@@ -48,6 +50,7 @@
 - Uses local policy documents and mock user state instead of free-form guesses.
 - Phase 3.6 improves feature-question routing through `search_docs` and adds local mock order/usage checks.
 - Phase 3.7 adds mock risk-state checks and `route_reason` for tool-selection explainability.
+- Phase 4 adds a real-provider engineering layer while keeping mock runs reproducible by default.
 
 ## Current Limitations
 
@@ -56,4 +59,6 @@
 - Order and usage state are small local mock datasets, not production system integrations.
 - Risk state is also local mock data, not a production risk-control system.
 - Eval metrics are heuristic and are not a substitute for production evaluation.
-- No real model provider or real database is connected.
+- Real providers require user-supplied API keys and current official provider configuration.
+- Real-model results should be generated separately and not mixed with mock-provider conclusions.
+- No real database is connected.

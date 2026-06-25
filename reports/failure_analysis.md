@@ -51,6 +51,7 @@
 - `check_risk_state` is now an available local mock tool and is included in strict scoring.
 - `route_reason` helps identify whether a low score came from routing, unavailable state, or answer wording.
 - Unknown risk state is handled as mock `found: false`; it should prompt verification, not a production conclusion.
+- Phase 4 provider support does not change mock-based failure conclusions or claim real-model quality.
 
 ## Tasks With Future Tools
 
@@ -71,3 +72,4 @@
 - Add richer mock provider templates for tool-grounded answers.
 - Add targeted tests for low-scoring task categories.
 - Use `route_reason` to compare expected routing against actual selected tools.
+- Run real-provider evaluations separately from mock reports after explicit provider configuration.

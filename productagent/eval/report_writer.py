@@ -58,6 +58,8 @@ def build_eval_summary(
             "- Phase 3.7 adds `check_risk_state` as a local mock risk-state tool, so risk-state requirements now count as available tools.",
             "- These mock tools do not connect to a real order system, user system, database, or external API.",
             "- `route_reason` explains why ToolAgent selected each tool, improving routing auditability.",
+            "- Phase 4 adds DeepSeek, Qwen, OpenAI, and Gemini provider-layer support through `OpenAICompatibleProvider`.",
+            "- This report does not fabricate real-model effects. Mock metrics and real-provider metrics should be reviewed separately.",
             "",
             "## Available Tool Hits",
             "",
@@ -80,6 +82,7 @@ def build_eval_summary(
             "- Uses local policy documents and mock user state instead of free-form guesses.",
             "- Phase 3.6 improves feature-question routing through `search_docs` and adds local mock order/usage checks.",
             "- Phase 3.7 adds mock risk-state checks and `route_reason` for tool-selection explainability.",
+            "- Phase 4 adds a real-provider engineering layer while keeping mock runs reproducible by default.",
             "",
             "## Current Limitations",
             "",
@@ -88,7 +91,9 @@ def build_eval_summary(
             "- Order and usage state are small local mock datasets, not production system integrations.",
             "- Risk state is also local mock data, not a production risk-control system.",
             "- Eval metrics are heuristic and are not a substitute for production evaluation.",
-            "- No real model provider or real database is connected.",
+            "- Real providers require user-supplied API keys and current official provider configuration.",
+            "- Real-model results should be generated separately and not mixed with mock-provider conclusions.",
+            "- No real database is connected.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -131,6 +136,7 @@ def build_failure_analysis(evaluated_by_agent: dict[str, list[dict[str, Any]]]) 
             "- `check_risk_state` is now an available local mock tool and is included in strict scoring.",
             "- `route_reason` helps identify whether a low score came from routing, unavailable state, or answer wording.",
             "- Unknown risk state is handled as mock `found: false`; it should prompt verification, not a production conclusion.",
+            "- Phase 4 provider support does not change mock-based failure conclusions or claim real-model quality.",
             "",
             "## Tasks With Future Tools",
             "",
@@ -158,6 +164,7 @@ def build_failure_analysis(evaluated_by_agent: dict[str, list[dict[str, Any]]]) 
             "- Add richer mock provider templates for tool-grounded answers.",
             "- Add targeted tests for low-scoring task categories.",
             "- Use `route_reason` to compare expected routing against actual selected tools.",
+            "- Run real-provider evaluations separately from mock reports after explicit provider configuration.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -223,6 +230,7 @@ def build_tool_trace_report(
                 "- Future tools are visible in reports but excluded from strict `tool_call_accuracy`.",
                 "- Phase 3.6 local mock business-state tools are included in available-tool tracing and scoring.",
                 "- Phase 3.7 local mock risk-state tools are included in available-tool tracing and scoring.",
+                "- Phase 4 provider-layer support is available, but this report does not claim real-model performance unless those providers are explicitly run.",
                 "",
                 "## Future Tool Tasks",
                 "",
@@ -249,6 +257,7 @@ def build_tool_trace_report(
             "- Risk-state checks use local mock data, not a real risk-control system.",
             "- Payment and invoice-specific external checks remain future tool candidates.",
             "- A reasonable substitute tool call is shown in `tool_calls`, but it is not treated as a full hit for a distinct future tool.",
+            "- DeepSeek, Qwen, OpenAI, and Gemini provider outputs should be traced and evaluated in separate runs, not inferred from mock results.",
         ]
     )
     return "\n".join(lines) + "\n"

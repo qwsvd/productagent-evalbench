@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from productagent.data_loader import PROJECT_ROOT
 from productagent.models.base import BaseProvider
+from productagent.models.provider_response import normalize_provider_response
 from productagent.tool_coverage import split_required_tools
 from productagent.tools import (
     check_order_state,
@@ -210,7 +211,7 @@ class ToolAgent:
                 },
             )
 
-            base_answer = self.provider.generate(
+            provider_output = self.provider.generate(
                 user_query=user_query,
                 task_type=task_type,
                 expected_answer_points=expected_answer_points,
@@ -218,6 +219,7 @@ class ToolAgent:
                 risk_points=risk_points,
                 retrieved_context=retrieved_context,
             )
+            base_answer, provider_response = normalize_provider_response(self.provider.name, provider_output)
             final_answer = _compose_tool_answer(
                 base_answer=base_answer,
                 issue_type=issue_type,
@@ -258,6 +260,7 @@ class ToolAgent:
                 "tool_calls": tool_calls,
                 "retrieved_context": retrieved_context,
                 "final_answer": final_answer,
+                "provider_response": provider_response,
                 "risk_check": risk_result,
                 "required_tools": required_tools,
                 "available_required_tools": coverage["available"],

@@ -1,6 +1,7 @@
 from typing import Any
 
 from productagent.models.base import BaseProvider
+from productagent.models.provider_response import normalize_provider_response
 from productagent.tracing import TraceLogger
 
 
@@ -34,13 +35,14 @@ class BaselineAgent:
         )
 
         try:
-            final_answer = self.provider.generate(
+            provider_output = self.provider.generate(
                 user_query=user_query,
                 task_type=task_type,
                 expected_answer_points=expected_answer_points,
                 required_tools=required_tools,
                 risk_points=risk_points,
             )
+            final_answer, provider_response = normalize_provider_response(self.provider.name, provider_output)
         except Exception as exc:
             self._log(
                 trace_id=trace_id,
@@ -69,6 +71,7 @@ class BaselineAgent:
             "provider": self.provider.name,
             "user_query": user_query,
             "final_answer": final_answer,
+            "provider_response": provider_response,
             "expected_answer_points": expected_answer_points,
             "risk_points": risk_points,
         }

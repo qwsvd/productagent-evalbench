@@ -3,6 +3,7 @@ from typing import Any
 
 from productagent.data_loader import PROJECT_ROOT
 from productagent.models.base import BaseProvider
+from productagent.models.provider_response import normalize_provider_response
 from productagent.rag.retriever import SimpleKeywordRetriever
 from productagent.tracing import TraceLogger
 
@@ -56,7 +57,7 @@ class RagAgent:
                 payload={"query": user_query, "result_count": len(retrieved_context)},
             )
 
-            final_answer = self.provider.generate(
+            provider_output = self.provider.generate(
                 user_query=user_query,
                 task_type=task_type,
                 expected_answer_points=expected_answer_points,
@@ -64,6 +65,7 @@ class RagAgent:
                 risk_points=risk_points,
                 retrieved_context=retrieved_context,
             )
+            final_answer, provider_response = normalize_provider_response(self.provider.name, provider_output)
         except Exception as exc:
             self._log(
                 trace_id=trace_id,
@@ -93,6 +95,7 @@ class RagAgent:
             "user_query": user_query,
             "retrieved_context": retrieved_context,
             "final_answer": final_answer,
+            "provider_response": provider_response,
             "expected_answer_points": expected_answer_points,
             "risk_points": risk_points,
         }

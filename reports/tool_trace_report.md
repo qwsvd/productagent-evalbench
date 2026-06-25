@@ -25,6 +25,7 @@
 - Future tools are visible in reports but excluded from strict `tool_call_accuracy`.
 - Phase 3.6 local mock business-state tools are included in available-tool tracing and scoring.
 - Phase 3.7 local mock risk-state tools are included in available-tool tracing and scoring.
+- Phase 4 provider-layer support is available, but this report does not claim real-model performance unless those providers are explicitly run.
 
 ## Future Tool Tasks
 
@@ -46,3 +47,4 @@ Tracing makes it possible to inspect task starts, retrieval, tool calls, risk ch
 - Risk-state checks use local mock data, not a real risk-control system.
 - Payment and invoice-specific external checks remain future tool candidates.
 - A reasonable substitute tool call is shown in `tool_calls`, but it is not treated as a full hit for a distinct future tool.
+- DeepSeek, Qwen, OpenAI, and Gemini provider outputs should be traced and evaluated in separate runs, not inferred from mock results.
