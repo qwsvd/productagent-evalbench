@@ -5,14 +5,14 @@ AVAILABLE_TOOLS = {
     "search_docs",
     "read_policy",
     "check_user_state",
+    "check_order_state",
+    "check_usage_state",
     "classify_issue",
     "create_ticket",
     "risk_check",
 }
 
 FUTURE_MOCK_UNAVAILABLE_TOOLS = {
-    "check_order_state",
-    "check_usage_state",
     "check_payment_state",
     "check_invoice_state",
     "check_risk_state",

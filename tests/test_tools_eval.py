@@ -12,7 +12,14 @@ from productagent.eval.metrics import (
     user_experience_score,
 )
 from productagent.models import MockProvider
-from productagent.tools import check_user_state, classify_issue, read_policy, risk_check
+from productagent.tools import (
+    check_order_state,
+    check_usage_state,
+    check_user_state,
+    classify_issue,
+    read_policy,
+    risk_check,
+)
 from productagent.tracing import TraceLogger
 
 
@@ -39,6 +46,24 @@ def test_check_user_state_returns_mock_state() -> None:
     assert result["account_status"] == "normal_account"
     assert "advanced_analysis" in result["eligible_features"]
     assert result["checked_feature"] == "advanced_analysis"
+
+
+def test_check_order_state_returns_mock_order_state() -> None:
+    result = check_order_state(order_id="order_002")
+
+    assert result["found"] is True
+    assert result["order_id"] == "order_002"
+    assert result["payment_status"] == "paid"
+    assert result["refundable"] is True
+
+
+def test_check_usage_state_returns_mock_usage_state() -> None:
+    result = check_usage_state("user_001", feature_name="advanced_export")
+
+    assert result["found"] is True
+    assert result["feature_name"] == "advanced_export"
+    assert result["usage_status"] == "available"
+    assert result["usage_count"] == 2
 
 
 def test_risk_check_detects_direct_refund_promise() -> None:
@@ -75,20 +100,69 @@ def test_tool_agent_returns_unavailable_required_tools() -> None:
 
     result = agent.run(
         task_id="tool_future_test",
-        user_query="user_001 paid but membership is not active",
+        user_query="user_001 cannot use batch export because of risk limits",
         task_type="membership_check",
-        required_tools=["check_order_state", "check_user_state"],
+        required_tools=["check_risk_state", "check_user_state"],
         risk_points=[],
         user_id="user_001",
         tool_availability={
-            "check_order_state": "future_mock_unavailable",
+            "check_risk_state": "future_mock_unavailable",
             "check_user_state": "available",
         },
     )
 
     assert result["available_required_tools"] == ["check_user_state"]
-    assert result["unavailable_required_tools"] == ["check_order_state"]
+    assert result["unavailable_required_tools"] == ["check_risk_state"]
     assert "Current MVP has not implemented" in result["tool_coverage_note"]
+
+
+def test_tool_agent_feature_question_calls_search_docs() -> None:
+    agent = ToolAgent(provider=MockProvider(), top_k=2)
+
+    result = agent.run(
+        task_id="tool_feature_test",
+        user_query="What is the difference between basic reports and advanced feature guide?",
+        task_type="product_qa",
+        required_tools=["search_docs"],
+        tool_availability={"search_docs": "available"},
+    )
+
+    tool_names = [call["tool_name"] for call in result["tool_calls"]]
+    assert "search_docs" in tool_names
+
+
+def test_tool_agent_refund_task_calls_check_order_state() -> None:
+    agent = ToolAgent(provider=MockProvider(), top_k=2)
+
+    result = agent.run(
+        task_id="tool_refund_test",
+        user_query="Can I refund order_002 after payment?",
+        task_type="refund_check",
+        required_tools=["check_order_state", "read_policy"],
+        tool_availability={"check_order_state": "available", "read_policy": "available"},
+        order_id="order_002",
+    )
+
+    tool_names = [call["tool_name"] for call in result["tool_calls"]]
+    assert "read_policy" in tool_names
+    assert "check_order_state" in tool_names
+
+
+def test_tool_agent_membership_usage_task_calls_check_usage_state() -> None:
+    agent = ToolAgent(provider=MockProvider(), top_k=2)
+
+    result = agent.run(
+        task_id="tool_usage_test",
+        user_query="user_001 cannot use advanced export feature",
+        task_type="membership_check",
+        required_tools=["check_user_state", "check_usage_state"],
+        tool_availability={"check_user_state": "available", "check_usage_state": "available"},
+        user_id="user_001",
+    )
+
+    tool_names = [call["tool_name"] for call in result["tool_calls"]]
+    assert "check_user_state" in tool_names
+    assert "check_usage_state" in tool_names
 
 
 def test_trace_logger_writes_jsonl(tmp_path: Path) -> None:
@@ -124,10 +198,10 @@ def test_eval_metrics_return_scores() -> None:
 
 def test_tool_call_accuracy_scores_only_available_tools() -> None:
     task = {
-        "required_tools": ["read_policy", "check_order_state"],
+        "required_tools": ["read_policy", "check_risk_state"],
         "tool_availability": {
             "read_policy": "available",
-            "check_order_state": "future_mock_unavailable",
+            "check_risk_state": "future_mock_unavailable",
         },
     }
     result = {"tool_calls": [{"tool_name": "read_policy"}]}
@@ -135,10 +209,28 @@ def test_tool_call_accuracy_scores_only_available_tools() -> None:
     assert tool_call_accuracy(result, task) == 1.0
 
 
+def test_tool_call_accuracy_scores_order_and_usage_as_available() -> None:
+    task = {
+        "required_tools": ["check_order_state", "check_usage_state"],
+        "tool_availability": {
+            "check_order_state": "available",
+            "check_usage_state": "available",
+        },
+    }
+    result = {
+        "tool_calls": [
+            {"tool_name": "check_order_state"},
+            {"tool_name": "check_usage_state"},
+        ]
+    }
+
+    assert tool_call_accuracy(result, task) == 1.0
+
+
 def test_future_mock_unavailable_does_not_penalize_accuracy() -> None:
     task = {
-        "required_tools": ["check_order_state"],
-        "tool_availability": {"check_order_state": "future_mock_unavailable"},
+        "required_tools": ["check_risk_state"],
+        "tool_availability": {"check_risk_state": "future_mock_unavailable"},
     }
     result = {"tool_calls": []}
 
@@ -179,3 +271,11 @@ def test_cli_compare_three_agents_generates_eval_summary() -> None:
 
 def test_tool_coverage_doc_exists() -> None:
     assert (PROJECT_ROOT / "docs" / "tool_coverage.md").exists()
+
+
+def test_product_tasks_jsonl_is_valid_json() -> None:
+    path = PROJECT_ROOT / "data" / "tasks" / "product_tasks.jsonl"
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    assert len(records) >= 20
+    assert all("tool_availability" in record for record in records)

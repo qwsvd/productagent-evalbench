@@ -6,6 +6,8 @@ from productagent.data_loader import PROJECT_ROOT
 from productagent.models.base import BaseProvider
 from productagent.tool_coverage import split_required_tools
 from productagent.tools import (
+    check_order_state,
+    check_usage_state,
     check_user_state,
     classify_issue,
     create_ticket,
@@ -42,6 +44,7 @@ class ToolAgent:
         required_tools: list[str] | None = None,
         risk_points: list[str] | None = None,
         user_id: str | None = None,
+        order_id: str | None = None,
         tool_availability: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         expected_answer_points = expected_answer_points or []
@@ -68,39 +71,12 @@ class ToolAgent:
                 func=classify_issue,
                 user_query=user_query,
             )
-            issue_type = classification["issue_type"]
+            issue_type = _route_type(user_query, task_type, classification["issue_type"])
             resolved_user_id = user_id or _extract_user_id(user_query) or "unknown"
+            resolved_order_id = order_id or _extract_order_id(user_query)
+            feature_name = _infer_feature_name(user_query)
 
-            if issue_type in {"membership", "account"}:
-                self._call_tool(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    tool_calls=tool_calls,
-                    tool_name="check_user_state",
-                    func=check_user_state,
-                    user_id=resolved_user_id,
-                    feature_name=_infer_feature_name(user_query),
-                )
-                policy_name = "account_policy" if issue_type == "account" else "feature_guide"
-                policy_result = self._read_policy_tool(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    tool_calls=tool_calls,
-                    policy_name=policy_name,
-                )
-                _append_policy_context(retrieved_context, policy_result)
-
-            elif issue_type in {"refund", "payment", "invoice"}:
-                policy_name = _policy_for_financial_issue(issue_type)
-                policy_result = self._read_policy_tool(
-                    trace_id=trace_id,
-                    task_id=task_id,
-                    tool_calls=tool_calls,
-                    policy_name=policy_name,
-                )
-                _append_policy_context(retrieved_context, policy_result)
-
-            elif issue_type == "product_question":
+            if _should_search_docs(issue_type, user_query, task_type):
                 docs_result = self._call_tool(
                     trace_id=trace_id,
                     task_id=task_id,
@@ -119,6 +95,69 @@ class ToolAgent:
                     payload={"query": user_query, "result_count": len(docs_result)},
                 )
 
+            if issue_type == "membership":
+                self._call_user_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+                policy_result = self._read_policy_tool(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    tool_calls=tool_calls,
+                    policy_name="feature_guide",
+                )
+                _append_policy_context(retrieved_context, policy_result)
+                if _needs_order_check(user_query, task_type, required_tools, resolved_order_id):
+                    self._call_order_state(trace_id, task_id, tool_calls, resolved_order_id, resolved_user_id)
+                if _needs_usage_check(user_query, task_type, required_tools):
+                    self._call_usage_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+
+            elif issue_type == "account":
+                self._call_user_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+                policy_result = self._read_policy_tool(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    tool_calls=tool_calls,
+                    policy_name="account_policy",
+                )
+                _append_policy_context(retrieved_context, policy_result)
+
+            elif issue_type in {"refund", "payment"}:
+                policy_result = self._read_policy_tool(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    tool_calls=tool_calls,
+                    policy_name="refund_policy",
+                )
+                _append_policy_context(retrieved_context, policy_result)
+                if _needs_order_check(user_query, task_type, required_tools, resolved_order_id):
+                    self._call_order_state(trace_id, task_id, tool_calls, resolved_order_id, resolved_user_id)
+                if _needs_usage_check(user_query, task_type, required_tools):
+                    self._call_usage_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+
+            elif issue_type == "invoice":
+                policy_result = self._read_policy_tool(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    tool_calls=tool_calls,
+                    policy_name="faq",
+                )
+                _append_policy_context(retrieved_context, policy_result)
+                if _needs_order_check(user_query, task_type, required_tools, resolved_order_id):
+                    self._call_order_state(trace_id, task_id, tool_calls, resolved_order_id, resolved_user_id)
+
+            elif issue_type == "product_question":
+                if _needs_user_state_check(user_query, required_tools):
+                    self._call_user_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+                if _needs_usage_check(user_query, task_type, required_tools):
+                    self._call_usage_state(trace_id, task_id, tool_calls, resolved_user_id, feature_name)
+
+            elif issue_type == "risk_control":
+                policy_result = self._read_policy_tool(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    tool_calls=tool_calls,
+                    policy_name="risk_rules",
+                )
+                _append_policy_context(retrieved_context, policy_result)
+
             else:
                 ticket_result = self._call_tool(
                     trace_id=trace_id,
@@ -130,14 +169,6 @@ class ToolAgent:
                     issue_type=issue_type,
                     summary=user_query[:160],
                 )
-                if _looks_like_risk_query(user_query):
-                    policy_result = self._read_policy_tool(
-                        trace_id=trace_id,
-                        task_id=task_id,
-                        tool_calls=tool_calls,
-                        policy_name="risk_rules",
-                    )
-                    _append_policy_context(retrieved_context, policy_result)
                 retrieved_context.append(
                     {
                         "source_file": "mock_ticket",
@@ -227,6 +258,7 @@ class ToolAgent:
             required_tools=task.get("required_tools", []),
             risk_points=task.get("risk_points", []),
             user_id=task.get("user_id"),
+            order_id=task.get("order_id"),
             tool_availability=task.get("tool_availability"),
         )
 
@@ -246,6 +278,60 @@ class ToolAgent:
             func=read_policy,
             policy_name=policy_name,
             docs_dir=self.docs_dir,
+        )
+
+    def _call_user_state(
+        self,
+        trace_id: str,
+        task_id: str,
+        tool_calls: list[dict[str, Any]],
+        user_id: str,
+        feature_name: str | None,
+    ) -> dict[str, Any]:
+        return self._call_tool(
+            trace_id=trace_id,
+            task_id=task_id,
+            tool_calls=tool_calls,
+            tool_name="check_user_state",
+            func=check_user_state,
+            user_id=user_id,
+            feature_name=feature_name,
+        )
+
+    def _call_order_state(
+        self,
+        trace_id: str,
+        task_id: str,
+        tool_calls: list[dict[str, Any]],
+        order_id: str | None,
+        user_id: str,
+    ) -> dict[str, Any]:
+        return self._call_tool(
+            trace_id=trace_id,
+            task_id=task_id,
+            tool_calls=tool_calls,
+            tool_name="check_order_state",
+            func=check_order_state,
+            order_id=order_id,
+            user_id=user_id if user_id != "unknown" else None,
+        )
+
+    def _call_usage_state(
+        self,
+        trace_id: str,
+        task_id: str,
+        tool_calls: list[dict[str, Any]],
+        user_id: str,
+        feature_name: str | None,
+    ) -> dict[str, Any]:
+        return self._call_tool(
+            trace_id=trace_id,
+            task_id=task_id,
+            tool_calls=tool_calls,
+            tool_name="check_usage_state",
+            func=check_usage_state,
+            user_id=user_id,
+            feature_name=feature_name or "advanced_export",
         )
 
     def _call_tool(
@@ -284,6 +370,24 @@ class ToolAgent:
         )
 
 
+def _route_type(user_query: str, task_type: str, classified_issue_type: str) -> str:
+    if task_type == "risk_control" or _looks_like_risk_query(user_query):
+        return "risk_control"
+    if task_type == "account_limit" or classified_issue_type == "account":
+        return "account"
+    if task_type == "refund_check" or classified_issue_type == "refund":
+        return "refund"
+    if classified_issue_type in {"payment", "invoice"}:
+        return classified_issue_type
+    if task_type == "membership_check" or classified_issue_type == "membership":
+        return "membership"
+    if task_type == "product_qa" or _looks_like_feature_query(user_query):
+        return "product_question"
+    if classified_issue_type == "complaint":
+        return "complaint"
+    return classified_issue_type
+
+
 def _extract_user_id(user_query: str) -> str | None:
     match = re.search(r"user_\d{3}", user_query)
     if match:
@@ -291,12 +395,22 @@ def _extract_user_id(user_query: str) -> str | None:
     return None
 
 
+def _extract_order_id(user_query: str) -> str | None:
+    match = re.search(r"order_\d{3}", user_query)
+    if match:
+        return match.group(0)
+    return None
+
+
 def _infer_feature_name(user_query: str) -> str | None:
     lowered = user_query.lower()
-    if any(token in lowered for token in ["advanced", "premium", "高级", "楂樼骇", "分析", "鍒嗘瀽"]):
-        return "advanced_analysis"
-    if any(token in lowered for token in ["export", "导出", "瀵煎嚭"]):
-        return "batch_export"
+    if any(token in lowered for token in ["export", "导出", "瀵煎嚭", "批量", "鎵归噺"]):
+        return "advanced_export"
+    if any(
+        token in lowered
+        for token in ["advanced", "premium", "feature", "高级", "楂樼骇", "功能", "鍔熻兘", "分析", "鍒嗘瀽"]
+    ):
+        return "advanced_export"
     if any(token in lowered for token in ["automation", "自动化", "鑷姩"]):
         return "automation_tasks"
     if any(token in lowered for token in ["team", "团队", "鍥㈤槦"]):
@@ -340,7 +454,7 @@ def _compose_tool_answer(
     if user_state:
         if user_state.get("member_status") == "unknown":
             lines.append(
-                f"- User state for `{user_id}` is unknown in mock data; the answer must ask for further verification."
+                f"- User state for `{user_id}` is unknown in mock data; ask for further verification."
             )
         else:
             lines.append(
@@ -349,6 +463,30 @@ def _compose_tool_answer(
                 f"account_status={user_state['account_status']}, "
                 f"risk_flags={user_state['risk_flags']}."
             )
+
+    order_state = _first_tool_result(tool_calls, "check_order_state")
+    if order_state:
+        if order_state.get("found"):
+            lines.append(
+                "- Mock order state: "
+                f"order_id={order_state['order_id']}, "
+                f"payment_status={order_state['payment_status']}, "
+                f"refundable={order_state['refundable']}."
+            )
+        else:
+            lines.append("- Mock order state was not found; verify order details before concluding.")
+
+    usage_state = _first_tool_result(tool_calls, "check_usage_state")
+    if usage_state:
+        if usage_state.get("found"):
+            lines.append(
+                "- Mock usage state: "
+                f"feature={usage_state['feature_name']}, "
+                f"usage_status={usage_state['usage_status']}, "
+                f"usage_count={usage_state['usage_count']}/{usage_state['limit']}."
+            )
+        else:
+            lines.append("- Mock usage state was not found; verify user and feature state before concluding.")
 
     policy_sources = [
         call["tool_name"]
@@ -367,7 +505,7 @@ def _compose_tool_answer(
     if ticket_result:
         lines.append(f"- Mock ticket created: {ticket_result['ticket_id']} ({ticket_result['status']}).")
 
-    lines.append("- Next step: verify policy and user/order state before making any promise.")
+    lines.append("- Next step: verify policy and mock business state before making any promise.")
     return "\n".join(lines)
 
 
@@ -393,6 +531,109 @@ def _tool_coverage_note(coverage: dict[str, list[str]]) -> str:
     return " ".join(notes)
 
 
+def _should_search_docs(issue_type: str, user_query: str, task_type: str) -> bool:
+    return issue_type == "product_question" or task_type == "product_qa" or _looks_like_feature_query(user_query)
+
+
+def _needs_order_check(
+    user_query: str,
+    task_type: str,
+    required_tools: list[str],
+    order_id: str | None,
+) -> bool:
+    lowered = user_query.lower()
+    return bool(
+        order_id
+        or "check_order_state" in required_tools
+        or task_type in {"refund_check", "payment_check"}
+        or any(token in lowered for token in ["order", "paid", "payment", "refund", "订单", "支付", "退款", "璁㈠崟", "鏀粯", "閫€娆"])
+    )
+
+
+def _needs_usage_check(user_query: str, task_type: str, required_tools: list[str]) -> bool:
+    lowered = user_query.lower()
+    return bool(
+        "check_usage_state" in required_tools
+        or task_type == "membership_check"
+        or any(
+            token in lowered
+            for token in [
+                "usage",
+                "limit",
+                "quota",
+                "feature",
+                "advanced",
+                "premium",
+                "使用",
+                "次数",
+                "额度",
+                "限制",
+                "高级",
+                "功能",
+                "浣跨敤",
+                "闄愬埗",
+                "楂樼骇",
+                "鍔熻兘",
+            ]
+        )
+    )
+
+
+def _needs_user_state_check(user_query: str, required_tools: list[str]) -> bool:
+    lowered = user_query.lower()
+    return bool(
+        "check_user_state" in required_tools
+        or any(token in lowered for token in ["member", "membership", "account", "会员", "账号", "浼氬憳", "璐﹀彿"])
+    )
+
+
+def _looks_like_feature_query(user_query: str) -> bool:
+    lowered = user_query.lower()
+    return any(
+        token in lowered
+        for token in [
+            "feature",
+            "product",
+            "guide",
+            "use",
+            "how",
+            "advanced",
+            "premium",
+            "功能",
+            "高级功能",
+            "使用",
+            "无法使用",
+            "怎么用",
+            "产品",
+            "指南",
+            "鍔熻兘",
+            "楂樼骇",
+            "浣跨敤",
+            "浜у搧",
+        ]
+    )
+
+
+def _looks_like_risk_query(user_query: str) -> bool:
+    lowered = user_query.lower()
+    return any(
+        token in lowered
+        for token in [
+            "risk",
+            "bypass",
+            "avoid detection",
+            "绕过",
+            "规避",
+            "风控",
+            "风险",
+            "缁曡繃",
+            "瑙勯伩",
+            "椋庢帶",
+            "椋庨櫓",
+        ]
+    )
+
+
 def _first_tool_result(tool_calls: list[dict[str, Any]], tool_name: str) -> Any | None:
     for call in tool_calls:
         if call.get("tool_name") == tool_name:
@@ -408,22 +649,3 @@ def _safe_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
         else:
             safe[key] = value
     return safe
-
-
-def _looks_like_risk_query(user_query: str) -> bool:
-    lowered = user_query.lower()
-    return any(
-        token in lowered
-        for token in [
-            "risk",
-            "bypass",
-            "avoid detection",
-            "绕过",
-            "规避",
-            "风控",
-            "限制",
-            "椋庨櫓",
-            "缁曡繃",
-            "闄愬埗",
-        ]
-    )

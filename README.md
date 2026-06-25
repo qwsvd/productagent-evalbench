@@ -77,6 +77,21 @@ For details, see:
 docs/tool_coverage.md
 ```
 
+## Phase 3.6: Tool Routing and Mock Business-State Tools
+
+Phase 3.6 fixes ToolAgent routing for product feature questions. Product and feature queries now prioritize `search_docs`, so feature-guide tasks are evaluated against the local product docs instead of being misrouted as only membership checks.
+
+This phase also adds two local mock business-state tools:
+
+- `check_order_state`: returns deterministic mock order/payment/refundability state.
+- `check_usage_state`: returns deterministic mock feature usage and quota state.
+
+These tools do not connect to a real order system, user system, database, or external API. They are small local fixtures used to make tool calling, tracing, eval, and fair tool coverage reproducible in the offline MVP.
+
+Eval now treats `check_order_state` and `check_usage_state` as `available` tools for strict `tool_call_accuracy`. Future integrations such as payment-state, invoice-state, and deeper risk-state checks remain `future_mock_unavailable`.
+
+The project goal remains Agent engineering evaluation: tool calls, tracing, heuristic eval, and fair tool coverage reporting. It does not pretend to provide production business-system access.
+
 ### Phase 3 Limitations
 
 1. User state is mock data.
