@@ -2,13 +2,20 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from productagent.agents import BaselineAgent, RagAgent
+from productagent.agents import BaselineAgent, RagAgent, ToolAgent
 from productagent.data_loader import PROJECT_ROOT, load_task_set
+from productagent.eval import evaluate_results_by_agent
+from productagent.eval.report_writer import (
+    build_eval_summary,
+    build_failure_analysis,
+    build_tool_trace_report,
+)
 from productagent.models import MockProvider
 from productagent.output_writer import write_jsonl, write_markdown
+from productagent.tracing import TraceLogger
 
 
-SUPPORTED_AGENTS = {"baseline", "rag"}
+SUPPORTED_AGENTS = {"baseline", "rag", "tool"}
 
 
 def build_provider(provider_name: str) -> MockProvider:
@@ -17,11 +24,20 @@ def build_provider(provider_name: str) -> MockProvider:
     raise ValueError(f"Unsupported provider: {provider_name}")
 
 
-def build_agent(agent_name: str, provider: MockProvider, project_root: Path, top_k: int = 3) -> BaselineAgent | RagAgent:
+def build_agent(
+    agent_name: str,
+    provider: MockProvider,
+    project_root: Path,
+    top_k: int = 3,
+    trace_logger: TraceLogger | None = None,
+) -> BaselineAgent | RagAgent | ToolAgent:
+    docs_dir = project_root / "data" / "product_docs"
     if agent_name == "baseline":
-        return BaselineAgent(provider=provider)
+        return BaselineAgent(provider=provider, trace_logger=trace_logger)
     if agent_name == "rag":
-        return RagAgent(provider=provider, docs_dir=project_root / "data" / "product_docs", top_k=top_k)
+        return RagAgent(provider=provider, docs_dir=docs_dir, top_k=top_k, trace_logger=trace_logger)
+    if agent_name == "tool":
+        return ToolAgent(provider=provider, docs_dir=docs_dir, top_k=top_k, trace_logger=trace_logger)
     raise ValueError(f"Unsupported agent: {agent_name}")
 
 
@@ -32,23 +48,33 @@ def run_task_set(
     output_path: str | Path | None = None,
     project_root: str | Path | None = None,
     top_k: int = 3,
+    trace_logger: TraceLogger | None = None,
 ) -> list[dict[str, Any]]:
     root = Path(project_root) if project_root else PROJECT_ROOT
+    normalized_agent = _normalize_agent_name(agent_name)
+    if normalized_agent not in SUPPORTED_AGENTS:
+        raise ValueError(f"Unsupported agent: {agent_name}")
+
     provider = build_provider(provider_name)
-    agent = build_agent(agent_name, provider, project_root=root, top_k=top_k)
+    trace_logger = trace_logger or TraceLogger(root / "outputs" / "agent_trace.jsonl")
+    agent = build_agent(normalized_agent, provider, project_root=root, top_k=top_k, trace_logger=trace_logger)
     tasks = load_task_set(task_set, project_root=root)
 
     results = [agent.run_task(task) for task in tasks]
-    final_output_path = output_path or root / "outputs" / f"{agent_name}_{provider_name}_results.jsonl"
+    final_output_path = output_path or root / "outputs" / f"{normalized_agent}_{provider_name}_results.jsonl"
     write_jsonl(results, final_output_path)
 
-    print(f"Ran {len(results)} tasks with agent={agent_name}, provider={provider_name}")
+    print(f"Ran {len(results)} tasks with agent={normalized_agent}, provider={provider_name}")
     print(f"Saved results to {final_output_path}")
     for result in results:
         first_line = result["final_answer"].splitlines()[0]
-        if agent_name == "rag":
+        if normalized_agent == "rag":
             context_count = len(result.get("retrieved_context", []))
             print(f"- {result['task_id']}: {first_line} retrieved_context={context_count}")
+        elif normalized_agent == "tool":
+            tool_count = len(result.get("tool_calls", []))
+            risk_level = result.get("risk_check", {}).get("risk_level", "unknown")
+            print(f"- {result['task_id']}: {first_line} tool_calls={tool_count} risk={risk_level}")
         else:
             print(f"- {result['task_id']}: {first_line}")
 
@@ -63,10 +89,15 @@ def compare_agents(
     top_k: int = 3,
 ) -> Path:
     root = Path(project_root) if project_root else PROJECT_ROOT
-    normalized_agents = [_normalize_agent_name(agent_name) for agent_name in agent_names]
+    normalized_agents = [_normalize_agent_name(agent_name) for agent_name in agent_names if agent_name.strip()]
     for agent_name in normalized_agents:
         if agent_name not in SUPPORTED_AGENTS:
             raise ValueError(f"Unsupported agent in compare: {agent_name}")
+
+    tasks = load_task_set(task_set, project_root=root)
+    trace_path = root / "outputs" / "agent_trace.jsonl"
+    trace_logger = TraceLogger(trace_path)
+    trace_logger.clear()
 
     results_by_agent: dict[str, list[dict[str, Any]]] = {}
     output_paths: dict[str, Path] = {}
@@ -79,14 +110,40 @@ def compare_agents(
             output_path=output_path,
             project_root=root,
             top_k=top_k,
+            trace_logger=trace_logger,
         )
         output_paths[agent_name] = output_path
 
-    report = build_comparison_report(results_by_agent, output_paths, project_root=root)
-    report_path = root / "reports" / "rag_comparison.md"
-    write_markdown(report, report_path)
-    print(f"Saved comparison report to {report_path}")
-    return report_path
+    evaluated_by_agent = evaluate_results_by_agent(results_by_agent, tasks)
+    reports_dir = root / "reports"
+
+    eval_summary_path = reports_dir / "eval_summary.md"
+    failure_analysis_path = reports_dir / "failure_analysis.md"
+    tool_trace_report_path = reports_dir / "tool_trace_report.md"
+    write_markdown(
+        build_eval_summary(
+            evaluated_by_agent=evaluated_by_agent,
+            output_paths=output_paths,
+            task_count=len(tasks),
+            project_root=root,
+        ),
+        eval_summary_path,
+    )
+    write_markdown(build_failure_analysis(evaluated_by_agent), failure_analysis_path)
+    write_markdown(build_tool_trace_report(trace_path=trace_path, project_root=root), tool_trace_report_path)
+
+    return_path = eval_summary_path
+    if "baseline" in results_by_agent and "rag" in results_by_agent:
+        rag_report = build_comparison_report(results_by_agent, output_paths, project_root=root)
+        rag_report_path = reports_dir / "rag_comparison.md"
+        write_markdown(rag_report, rag_report_path)
+        if set(normalized_agents) == {"baseline", "rag"}:
+            return_path = rag_report_path
+
+    print(f"Saved eval summary to {eval_summary_path}")
+    print(f"Saved failure analysis to {failure_analysis_path}")
+    print(f"Saved tool trace report to {tool_trace_report_path}")
+    return return_path
 
 
 def build_comparison_report(
@@ -114,32 +171,31 @@ def build_comparison_report(
         output_paths.get("rag", Path("outputs/rag_mock_results.jsonl")),
         project_root,
     )
-    used_docs_text = "\n".join(f"- {doc}" for doc in used_docs) if used_docs else "- 暂无检索命中文档"
+    used_docs_text = "\n".join(f"- {doc}" for doc in used_docs) if used_docs else "- No retrieved docs."
 
     return "\n".join(
         [
             "# RAG Comparison Report",
             "",
-            f"- 任务总数：{task_count}",
-            f"- Baseline 输出文件：`{baseline_path}`",
-            f"- RAG 输出文件：`{rag_path}`",
+            f"- Total tasks: {task_count}",
+            f"- Baseline output: `{baseline_path}`",
+            f"- RAG output: `{rag_path}`",
             "",
-            "## RAG 使用了哪些文档",
+            "## Retrieved Docs",
             "",
             used_docs_text,
             "",
-            "## RAG 相比 Baseline 的改进点",
+            "## RAG Improvements Over Baseline",
             "",
-            "- RAG 会先检索产品文档，再把相关片段注入 Provider。",
-            "- RAG 结果包含 `retrieved_context`，更方便检查答案参考了哪些文档。",
-            "- 对退款、会员权益、账号限制等问题，RAG 能把回答边界收敛到产品政策上下文。",
+            "- RAG retrieves product documents before calling the provider.",
+            "- RAG results include `retrieved_context` for inspection.",
+            "- Product-policy answers are more grounded in local Markdown docs.",
             "",
-            "## 当前局限性",
+            "## Current Limitations",
             "",
-            "- 当前只是关键词检索，不是向量数据库。",
-            "- 当前 `MockProvider` 不代表真实模型能力。",
-            "- 当前没有 Memory、真实工具调用、Tracing 或自动评分。",
-            "- 检索结果只做简单打分，可能遗漏同义表达或复杂语义关系。",
+            "- Retrieval is keyword-based, not vector search.",
+            "- `MockProvider` is deterministic and does not represent a real model.",
+            "- This report is kept for backwards compatibility; see `reports/eval_summary.md` for the Phase 3 eval report.",
             "",
         ]
     )

@@ -1,5 +1,77 @@
 # ProductAgent-EvalBench
 
+## Phase 3: Tools + Tracing + Eval
+
+`ToolAgent` is the third MVP agent. It classifies each task, calls local mock tools when useful, records trace events, runs a local risk check, and then uses `MockProvider` for the final answer. It does not call real APIs, real databases, LangChain, LlamaIndex, vector databases, or online model providers.
+
+### Local Tools
+
+- `search_docs(query, top_k=3)`: reuses the existing keyword retriever over `data/product_docs/`.
+- `read_policy(policy_name)`: reads `refund_policy`, `account_policy`, `risk_rules`, `feature_guide`, or `faq`.
+- `check_user_state(user_id, feature_name=None)`: returns deterministic mock states for `user_001` through `user_004`.
+- `classify_issue(user_query)`: classifies refund, membership, account, payment, invoice, complaint, product question, or unknown issues.
+- `create_ticket(user_id, issue_type, summary)`: creates a deterministic mock ticket.
+- `risk_check(answer_or_plan)`: flags risky promises such as direct refunds, direct unblocks, fabricated user state, password requests, and uncertain claims without verification.
+
+### Tracing
+
+Agent runs write JSONL traces to:
+
+```text
+outputs/agent_trace.jsonl
+```
+
+Trace events include `task_start`, `retrieval`, `tool_call`, `risk_check`, `final_answer`, `task_end`, and `error`. Each event includes `trace_id`, `task_id`, `agent`, `provider`, `event_type`, `payload`, and `timestamp`.
+
+### Eval Metrics
+
+The MVP eval module computes heuristic local scores only:
+
+- `task_success_score`
+- `tool_call_accuracy`
+- `hallucination_risk`
+- `context_usage_score`
+- `user_experience_score`
+
+### Run ToolAgent
+
+```bash
+python -m productagent.cli run --agent tool --provider mock --task-set product_tasks
+```
+
+Output:
+
+```text
+outputs/tool_mock_results.jsonl
+outputs/agent_trace.jsonl
+```
+
+### Compare Baseline vs RAG vs Tool
+
+```bash
+python -m productagent.cli compare --agents baseline,rag,tool --provider mock --task-set product_tasks
+```
+
+Outputs:
+
+```text
+outputs/baseline_mock_results.jsonl
+outputs/rag_mock_results.jsonl
+outputs/tool_mock_results.jsonl
+outputs/agent_trace.jsonl
+reports/eval_summary.md
+reports/failure_analysis.md
+reports/tool_trace_report.md
+reports/rag_comparison.md
+```
+
+### Phase 3 Limitations
+
+1. User state is mock data.
+2. Tools are local simulations.
+3. Eval metrics are heuristic and do not represent production online evaluation.
+4. No real model provider or real database is connected.
+
 ProductAgent-EvalBench 是一个面向产品知识库与用户任务的多模型 Agent 上下文工程与评测系统。
 
 ## 项目定位

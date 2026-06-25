@@ -1,10 +1,10 @@
 # RAG Comparison Report
 
-- 任务总数：20
-- Baseline 输出文件：`outputs/baseline_mock_results.jsonl`
-- RAG 输出文件：`outputs/rag_mock_results.jsonl`
+- Total tasks: 20
+- Baseline output: `outputs/baseline_mock_results.jsonl`
+- RAG output: `outputs/rag_mock_results.jsonl`
 
-## RAG 使用了哪些文档
+## Retrieved Docs
 
 - account_policy.md
 - faq.md
@@ -12,15 +12,14 @@
 - refund_policy.md
 - risk_rules.md
 
-## RAG 相比 Baseline 的改进点
+## RAG Improvements Over Baseline
 
-- RAG 会先检索产品文档，再把相关片段注入 Provider。
-- RAG 结果包含 `retrieved_context`，更方便检查答案参考了哪些文档。
-- 对退款、会员权益、账号限制等问题，RAG 能把回答边界收敛到产品政策上下文。
+- RAG retrieves product documents before calling the provider.
+- RAG results include `retrieved_context` for inspection.
+- Product-policy answers are more grounded in local Markdown docs.
 
-## 当前局限性
+## Current Limitations
 
-- 当前只是关键词检索，不是向量数据库。
-- 当前 `MockProvider` 不代表真实模型能力。
-- 当前没有 Memory、真实工具调用、Tracing 或自动评分。
-- 检索结果只做简单打分，可能遗漏同义表达或复杂语义关系。
+- Retrieval is keyword-based, not vector search.
+- `MockProvider` is deterministic and does not represent a real model.
+- This report is kept for backwards compatibility; see `reports/eval_summary.md` for the Phase 3 eval report.

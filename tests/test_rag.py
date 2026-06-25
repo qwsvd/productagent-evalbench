@@ -8,7 +8,7 @@ from productagent.rag.retriever import SimpleKeywordRetriever
 def test_retriever_returns_product_doc_results() -> None:
     retriever = SimpleKeywordRetriever(PROJECT_ROOT / "data" / "product_docs")
 
-    results = retriever.retrieve("会员退款规则", top_k=2)
+    results = retriever.retrieve("会员 高级 功能", top_k=2)
 
     assert results
     assert len(results) <= 2
@@ -20,11 +20,11 @@ def test_rag_agent_handles_one_task() -> None:
 
     result = agent.run(
         task_id="product_rag_test",
-        user_query="会员不能用高级功能怎么办？",
+        user_query="会员不能用高级功能怎么办",
         task_type="membership_check",
-        expected_answer_points=["需要检查会员状态"],
+        expected_answer_points=["check member status"],
         required_tools=["check_user_state"],
-        risk_points=["不要编造用户会员状态"],
+        risk_points=["do not fabricate user state"],
     )
 
     assert result["task_id"] == "product_rag_test"
@@ -63,4 +63,4 @@ def test_cli_compare_generates_report() -> None:
     assert report_path.exists()
     content = report_path.read_text(encoding="utf-8")
     assert "RAG Comparison Report" in content
-    assert "任务总数" in content
+    assert "Total tasks" in content
